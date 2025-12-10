@@ -1,0 +1,16 @@
+{
+  "name": "NewPomodoroApp",
+  "displayName": "NewPomodoroApp",
+  "expo": {
+    "scheme": "NewPomodoroApp",
+    "ios": {
+      "bundleIdentifier": "org.reactjs.native.example.NewPomodoroApp",
+      "infoPlist": {
+        "NSCameraUsageDescription": "需要相機來顯示專注濾鏡"
+      }
+    },
+    "android": {
+      "package": "org.reactjs.xnative.example.NewPomodoroApp"
+    }
+  }
+}
