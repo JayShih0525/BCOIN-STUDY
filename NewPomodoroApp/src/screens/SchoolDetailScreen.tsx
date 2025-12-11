@@ -32,25 +32,25 @@ type SchoolUserRow = {
   school_code: string | null;
   school_name: string | null;
   total_seconds: number | null;
-  rank: number;                // 來自 school_ranking
-  allow_chat?: boolean | null; // 來自 view / function，可能不存在
+  rank: number;
+  allow_chat?: boolean | null;
 };
 
-// 依照排名決定圓圈背景顏色
+// Determine circle background color based on rank
 const getRankColor = (rank: number) => {
   switch (rank) {
     case 1:
-      return '#FFD700'; // 金
+      return '#FFD700'; // Gold
     case 2:
-      return '#C0C0C0'; // 銀
+      return '#C0C0C0'; // Silver
     case 3:
-      return '#CD7F32'; // 銅
+      return '#CD7F32'; // Bronze
     default:
-      return '#1051d3ff'; // 其他顏色
+      return '#1051d3ff'; // Default Blue
   }
 };
 
-// 排名文字顏色（前三名白字）
+// Determine rank text color (White for top 3)
 const getRankTextColor = (rank: number) => {
   return rank <= 3 ? '#FFFFFF' : '#6B7280';
 };
@@ -64,10 +64,10 @@ export const SchoolDetailScreen: React.FC = () => {
   const { schoolCode, schoolName } = route.params;
 
   const [members, setMembers] = useState<SchoolUserRow[]>([]);
-  const [loading, setLoading] = useState(false);       // 初次載入 / 非下拉重新整理
-  const [refreshing, setRefreshing] = useState(false); // 下拉重新整理
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  // 秒數 → "Xh Ym"
+  // Convert seconds to "Xh Ym"
   const formatSeconds = (sec: number | null | undefined) => {
     const total = Math.max(0, Math.floor(sec ?? 0));
     const h = Math.floor(total / 3600);
@@ -77,7 +77,6 @@ export const SchoolDetailScreen: React.FC = () => {
     return `${h}h ${m}m`;
   };
 
-  // ✅ 抽出共用載入 function，支援「初次／切換」與「下拉更新」
   const loadMembers = useCallback(
     async (options?: { asRefresh?: boolean }) => {
       const isRefresh = options?.asRefresh;
@@ -115,12 +114,10 @@ export const SchoolDetailScreen: React.FC = () => {
     [schoolCode],
   );
 
-  // ✅ 第一次進來時載入一次
   useEffect(() => {
     void loadMembers();
   }, [loadMembers]);
 
-  // ✅ 下拉更新 handler
   const handleRefresh = () => {
     void loadMembers({ asRefresh: true });
   };
@@ -156,12 +153,12 @@ export const SchoolDetailScreen: React.FC = () => {
 
     return (
       <View style={[styles.card, isMe && styles.myCard]}>
-        {/* 左側：排名 Badge */}
+        {/* Left: Rank Badge */}
         <View style={[styles.rankContainer, { backgroundColor: rankBgColor }]}>
           <Text style={[styles.rankText, { color: rankTextColor }]}>{item.rank}</Text>
         </View>
 
-        {/* 中間：使用者資訊 */}
+        {/* Center: User Info */}
         <View style={styles.infoContainer}>
           <View style={styles.nameRow}>
             <Text style={styles.name} numberOfLines={1}>
@@ -179,10 +176,12 @@ export const SchoolDetailScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* 右側：聊天按鈕或狀態 */}
+        {/* Right: Action Buttons or Status */}
         <View style={styles.actionContainer}>
           {isMe ? (
-            <Text style={styles.statusText}>Me</Text>
+            <View style={styles.meStatusBadge}>
+              <Text style={styles.meStatusText}>Me</Text>
+            </View>
           ) : item.allow_chat ? (
             <TouchableOpacity
               style={styles.chatButton}
@@ -211,7 +210,6 @@ export const SchoolDetailScreen: React.FC = () => {
           <Text style={styles.subtitle}>校內專注排行榜</Text>
         </View>
 
-        {/* ✅ 不再用整頁 loading，把 loading 表現在 RefreshControl + Empty Text */}
         <FlatList
           data={members}
           keyExtractor={(item) => item.user_id}
@@ -219,7 +217,7 @@ export const SchoolDetailScreen: React.FC = () => {
           contentContainerStyle={styles.listContent}
           refreshControl={
             <RefreshControl
-              refreshing={refreshing || loading} // 初次載入也會看到上方轉圈
+              refreshing={refreshing || loading}
               onRefresh={handleRefresh}
             />
           }
@@ -339,16 +337,18 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     justifyContent: 'center',
   },
+  
+  // Update: Sky blue color for Chat button
   chatButton: {
     flexDirection: 'row',
-    backgroundColor: COLORS.secondary,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    backgroundColor: '#0EA5E9', // Sky Blue 500
+    paddingHorizontal: 14,
+    paddingVertical: 6,
     borderRadius: 20,
     alignItems: 'center',
-    shadowColor: COLORS.secondary,
+    shadowColor: '#0EA5E9',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.3,
     shadowRadius: 3,
     elevation: 2,
   },
@@ -358,11 +358,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
 
-  statusText: {
-    fontSize: 12,
-    color: '#9CA3AF',
-    fontWeight: '500',
+  // New: Badge style for "Me"
+  meStatusBadge: {
+    backgroundColor: '#E5E7EB', // Gray 200
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
   },
+  meStatusText: {
+    fontSize: 12,
+    color: '#4B5563', // Gray 600
+    fontWeight: '700',
+  },
+
   disabledBadge: {
     flexDirection: 'row',
     alignItems: 'center',
