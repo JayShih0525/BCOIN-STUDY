@@ -1,9 +1,9 @@
 /**
  * ForestScreen
- * 只在「離開頁面」或「時間到 / 按下停止」時更新 Supabase
+ * 只在「離開頁面」或「時間到 / 按下停止」時，正確累加執行時間 & 加 coin
  */
 
-import React, { use, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Alert } from 'react-native';
 import { useRoute, useNavigation, RouteProp, useIsFocused } from '@react-navigation/native';
 import {
@@ -14,7 +14,7 @@ import {
   ActionButton,
 } from '../components';
 import { useTimer } from '../hooks/useTimer';
-import { useCoins } from '../hooks/useCoins';
+import { useCoinsContext } from '../context/CoinsContext';
 import { useTimeRecordsContext } from '../context';
 import { RootTabParamList } from '../types/navigation';
 import { COLORS, FONT_SIZES, FONT_WEIGHTS, SPACING } from '../constants/theme';
@@ -26,11 +26,20 @@ type ForestScreenRouteProp = RouteProp<RootTabParamList, 'Forest'>;
 export const ForestScreen: React.FC = () => {
   const route = useRoute<ForestScreenRouteProp>();
   const navigation = useNavigation();
-  const isFocused = useIsFocused(); // ⭐ 偵測是否還在 Forest 頁面
+  const isFocused = useIsFocused();
   const { signOut, user } = useAuth();
 
-  const { minutes, seconds, isActive, toggleTimer, setTimeLeft, getElapsedSeconds } = useTimer();
-  const { coins, addCoins, refresh: refreshCoins } = useCoins(user?.id ?? null);
+  const {
+    minutes,
+    seconds,
+    isActive,
+    toggleTimer,
+    setTimeLeft,
+    getAndResetElapsedSeconds,  // ✅ 改這裡
+    resetTimer,                 // ✅ 新增
+  } = useTimer();
+
+  const { coins, addCoins } = useCoinsContext();
 
   const {
     updateExecutedTime,
@@ -43,6 +52,10 @@ export const ForestScreen: React.FC = () => {
 
   const activeTaskIdRef = useRef<string | null>(null);
   const hasTimeUpAlertedRef = useRef<boolean>(false);
+
+  // ⭐ 用來避免重複累加 executedSeconds
+  const lastSavedElapsedRef = useRef<number>(0);
+  const hasRunSinceLastSaveRef = useRef<boolean>(false);
 
   /** 計算剩餘秒數 */
   const getRemainingSeconds = (task: TimeRecord): number => {
@@ -58,12 +71,6 @@ export const ForestScreen: React.FC = () => {
     return getActiveRecordForCurrentTime();
   };
 
-  useEffect(() => {
-    if (isFocused) {
-      void refreshCoins();
-    }
-  }, [isFocused, refreshCoins]);
-
   /** 初始化任務 + 時間 */
   useEffect(() => {
     const task = resolveCurrentTask();
@@ -76,32 +83,43 @@ export const ForestScreen: React.FC = () => {
       const remaining = getRemainingSeconds(task);
       setTimeLeft(remaining);
 
+      // 初始化 elapsed（這次 session 一開始算 0）
+      hasRunSinceLastSaveRef.current = false;
+
       // 若一進來就已經做完
       if (remaining <= 0) {
         hasTimeUpAlertedRef.current = true;
-        Alert.alert("時間到了", "本次任務已結束！");
+        Alert.alert('時間到了', '本次任務已結束！');
       }
     } else {
       setCurrentTask(null);
       activeTaskIdRef.current = null;
       setTimeLeft(0);
+      lastSavedElapsedRef.current = 0;
+      hasRunSinceLastSaveRef.current = false;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskFromParams]);
 
+  /** 監聽 isActive，只要有啟動過一次就標記 hadRun */
+  useEffect(() => {
+    if (isActive) {
+      hasRunSinceLastSaveRef.current = true;
+    }
+  }, [isActive]);
+
+  /** 每 10 秒加一次 coin（只有在畫面在前景 + 計時器啟動時） */
   useEffect(() => {
     if (!isFocused || !isActive) return;
 
     const interval = setInterval(() => {
-      console.log("⏱️ +1 coin (10 秒)");
-      addCoins(1); // 自動寫進資料庫
-    }, 10000); // 10 秒
+      console.log('⏱️ +1 coin (10 秒)');
+      addCoins(1); // 先改本地 state，hook 裡自己決定什麼時候同步到 DB
+    }, 10_000);
 
-    // 離開畫面 / 停止計時 → 不再加 coin
     return () => clearInterval(interval);
+  }, [isFocused, isActive, addCoins]);
 
-  }, [isFocused, isActive]);
-
-  /** ⭐ 當時間跑到 0 時顯示 Alert（只顯示一次） */
   useEffect(() => {
     if (!isActive) return;
 
@@ -110,29 +128,42 @@ export const ForestScreen: React.FC = () => {
     if (remaining <= 0 && !hasTimeUpAlertedRef.current) {
       hasTimeUpAlertedRef.current = true;
 
+      // 先把這一段跑完的秒數寫回去
+      if (activeTaskIdRef.current) {
+        const delta = getAndResetElapsedSeconds();
+        if (delta > 0) {
+          updateExecutedTime(activeTaskIdRef.current, delta);
+        }
+      }
+
       toggleTimer(); // 停止倒數
       setTimeLeft(0);
 
       Alert.alert("時間到了", "本次任務已結束！");
     }
-  }, [minutes, seconds]);
+  }, [minutes, seconds, isActive, getAndResetElapsedSeconds, updateExecutedTime]);
 
-  /** ⭐ 離開 Forest 頁面時 → 更新 Supabase */
+  /** 離開 Forest 頁面時 → 只把「新增的秒數」寫進 Supabase */
   useEffect(() => {
     if (!isFocused) {
-      // 已經沒有任務
-      if (!activeTaskIdRef.current) return;
+      // 沒任務就清掉 timer 即可
+      if (!activeTaskIdRef.current) {
+        resetTimer();
+        return;
+      }
 
-      const elapsed = getElapsedSeconds(); // 本次 session 累計秒數
+      // 取出這一段 session 的秒數（只會算有在跑的秒）
+      const elapsed = getAndResetElapsedSeconds();
       if (elapsed > 0) {
-        // 寫入 DB（累加）
         updateExecutedTime(activeTaskIdRef.current, elapsed);
       }
 
-      // 停止計時器
-      if (isActive) toggleTimer();
+      // 保險：把 timer 停掉
+      if (isActive) {
+        toggleTimer();
+      }
     }
-  }, [isFocused]);
+  }, [isFocused, isActive, getAndResetElapsedSeconds, resetTimer, updateExecutedTime]);
 
   /** 按 Start / Pause 時的邏輯 */
   const handleToggleTimer = () => {
@@ -143,11 +174,23 @@ export const ForestScreen: React.FC = () => {
 
     const remaining = minutes * 60 + seconds;
 
-    if (!isActive && remaining <= 0) {
-      Alert.alert("時間到了", "本次任務已結束！");
+    // 準備要從「未在跑 -> 開始跑」
+    if (!isActive) {
+      if (remaining <= 0) {
+        Alert.alert("時間到了", "本次任務已結束！");
+        return;
+      }
+      // 開始跑之前，把本次 session 歸零（可能是舊的）
+      getAndResetElapsedSeconds();
+      toggleTimer();
       return;
     }
 
+    // 準備從「跑 -> 暫停」：把這一段的秒數加回去
+    const delta = getAndResetElapsedSeconds();
+    if (delta > 0) {
+      updateExecutedTime(activeTaskIdRef.current, delta);
+    }
     toggleTimer();
   };
 

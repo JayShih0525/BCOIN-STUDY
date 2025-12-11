@@ -11,10 +11,11 @@ import {
   Alert,
   ActivityIndicator,
   Image,
+  RefreshControl,        // ⭐ 新增
 } from 'react-native';
 import { ScreenContainer, TopBar } from '../components';
 import { useAuth } from '../context/AuthContext';
-import { useCoins } from '../hooks/useCoins';
+import { useCoinsContext } from '../context/CoinsContext';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types/navigation';
@@ -22,7 +23,6 @@ import { useShopItems } from '../hooks/useShopItems';
 import { ShopItem } from '../constants/shop';
 import { COLORS, FONT_SIZES, FONT_WEIGHTS, SPACING } from '../constants/theme';
 import { supabase } from '../lib/supabase';
-import { useIsFocused } from '@react-navigation/native'; 
 
 type ShopNavProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -37,8 +37,8 @@ export const ShopScreen: React.FC = () => {
     coins,
     removeCoins,
     loading: coinsLoading,
-    refresh: refreshCoins, 
-  } = useCoins(user?.id ?? undefined);
+    refresh: refreshCoins,
+  } = useCoinsContext();
 
   const navigation = useNavigation<ShopNavProp>();
 
@@ -49,37 +49,48 @@ export const ShopScreen: React.FC = () => {
   const [ownedIds, setOwnedIds] = useState<string[]>([]);
   const [loadingOwned, setLoadingOwned] = useState(false);
 
-  const isFocused = useIsFocused();  // ⭐ 判斷商店畫面現在有沒有在前景
+  // 3️⃣ 下拉刷新狀態
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    if (isFocused) {
-      void refreshCoins();
-    }
-  }, [isFocused, refreshCoins]);
-
-  // 讀取使用者已購買清單
-  useEffect(() => {
+  // 把「載入已購買清單」抽成一個 function，之後下拉也可以呼叫
+  const fetchOwned = useCallback(async () => {
     if (!user) {
       setOwnedIds([]);
       return;
     }
 
-    (async () => {
-      setLoadingOwned(true);
-      const { data, error } = await supabase
-        .from('shop_purchases') // 你在 DB 建的表
-        .select('item_id')
-        .eq('user_id', user.id);
+    setLoadingOwned(true);
+    const { data, error } = await supabase
+      .from('shop_purchases')
+      .select('item_id')
+      .eq('user_id', user.id);
 
-      if (error) {
-        console.warn('載入已購買商品失敗：', error.message);
-        setOwnedIds([]);
-      } else {
-        setOwnedIds((data ?? []).map(row => row.item_id));
-      }
-      setLoadingOwned(false);
-    })();
+    if (error) {
+      console.warn('載入已購買商品失敗：', error.message);
+      setOwnedIds([]);
+    } else {
+      setOwnedIds((data ?? []).map(row => row.item_id));
+    }
+    setLoadingOwned(false);
   }, [user]);
+
+  // 初次進入畫面時載入已購買清單（只跑一次）
+  useEffect(() => {
+    void fetchOwned();
+  }, [fetchOwned]);
+
+  // 下拉時要做的事：重抓 coins + owned
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        refreshCoins?.(), // 如果 useCoins 有給 refresh
+        fetchOwned(),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshCoins, fetchOwned]);
 
   // 開啟濾鏡（只有已購買的才能走到這裡）
   const handleUseFilter = (item: ShopItem) => {
@@ -99,7 +110,6 @@ export const ShopScreen: React.FC = () => {
       }
 
       if (ownedIds.includes(item.id)) {
-        // 已經買過就不要重複扣錢
         Alert.alert('提醒', '你已經擁有這個商品了，可以直接使用。');
         return;
       }
@@ -112,7 +122,6 @@ export const ShopScreen: React.FC = () => {
         return;
       }
 
-      // 確認視窗
       Alert.alert(
         '確認購買',
         `確定要花 ${item.price} B 購買「${item.name}」嗎？`,
@@ -173,7 +182,7 @@ export const ShopScreen: React.FC = () => {
           </Text>
         </View>
 
-        {isLoading && (
+        {isLoading && !refreshing && (
           <View style={{ alignItems: 'center', marginBottom: SPACING.md }}>
             <ActivityIndicator />
             <Text style={{ marginTop: 4, fontSize: FONT_SIZES.xs }}>
@@ -189,6 +198,13 @@ export const ShopScreen: React.FC = () => {
           columnWrapperStyle={styles.columnWrapper}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
+          // ⭐ 加上下拉更新
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+            />
+          }
           renderItem={({ item }) => {
             const owned = ownedIds.includes(item.id);
 
@@ -203,7 +219,6 @@ export const ShopScreen: React.FC = () => {
                     />
                   ) : (
                     <Text style={styles.placeholderText}>
-                      {/* 如果你 DB 也有 emoji，就可以放在 mapRowToShopItem 裡 */}
                       {item.name.charAt(0).toUpperCase()}
                     </Text>
                   )}
@@ -263,6 +278,8 @@ export const ShopScreen: React.FC = () => {
     </ScreenContainer>
   );
 };
+
+// （styles 保持原本那段就好）
 
 const styles = StyleSheet.create({
   container: {

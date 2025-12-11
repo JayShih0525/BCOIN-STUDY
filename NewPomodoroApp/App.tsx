@@ -13,7 +13,9 @@ import { TabNavigator } from './src/navigation';
 import { TimeRecordsProvider } from './src/context';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import AuthScreen from './src/screens/AuthScreen';
-import { FilterCameraScreen } from './src/screens/FilterCameraScreen'; // ⬅️ 新增
+import { FilterCameraScreen } from './src/screens/FilterCameraScreen'; 
+import { CoinsProvider } from './src/context/CoinsContext';
+
 
 const Stack = createNativeStackNavigator();
 
@@ -54,7 +56,9 @@ function App() {
   return (
     <AuthProvider>
       <TimeRecordsProvider>
-        <AppNavigation />
+        <CoinsProvider>
+          <AppNavigation />
+        </CoinsProvider>
       </TimeRecordsProvider>
     </AuthProvider>
   );

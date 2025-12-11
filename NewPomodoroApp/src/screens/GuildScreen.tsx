@@ -1,16 +1,24 @@
 /**
  * GuildScreen
- * 公會頁面 - 內部直接顯示排行榜，可切換「校內 / 全國」
+ * 公會頁面 - 排行榜，可切換「校內 / 全國」
+ * 只在「第一次進入 / 第一次切到該模式 / 下拉更新」時才打 API。
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, ActivityIndicator } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  FlatList,
+  ActivityIndicator,
+  RefreshControl,
+} from 'react-native';
 import { ScreenContainer, TopBar } from '../components';
-import { useCoins } from '../hooks/useCoins';
+import { useCoinsContext } from '../context/CoinsContext';
 import { COLORS, FONT_SIZES, FONT_WEIGHTS, SPACING } from '../constants/theme';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
-import { useIsFocused } from '@react-navigation/native';
 
 type RankingItem = {
   rank: number;
@@ -38,12 +46,19 @@ type SchoolRankingRow = {
 
 export const GuildScreen: React.FC = () => {
   const { user, signOut } = useAuth();
-  const { coins, refresh: refreshCoins } = useCoins(user?.id ?? null);
-  const isFocused = useIsFocused();
+  const { coins } = useCoinsContext();
 
   const [mode, setMode] = useState<'school' | 'global'>('school');
+
+  // 目前畫面顯示的排行榜
   const [ranking, setRanking] = useState<RankingItem[]>([]);
-  const [loading, setLoading] = useState(false);
+
+  // ⭐ 個別模式的快取
+  const [schoolRanking, setSchoolRanking] = useState<RankingItem[] | null>(null);
+  const [globalRanking, setGlobalRanking] = useState<RankingItem[] | null>(null);
+
+  const [loading, setLoading] = useState(false);      // 初次載入 / 首次切換某模式
+  const [refreshing, setRefreshing] = useState(false); // 下拉更新
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   /** 將秒數轉成人類可讀字串 */
@@ -56,108 +71,180 @@ export const GuildScreen: React.FC = () => {
     return `${h} 小時 ${m} 分`;
   };
 
-  /** 取得全國學校排行榜（global_ranking） */
-  const fetchGlobalRanking = useCallback(async () => {
-    setLoading(true);
-    setErrorMsg(null);
-    try {
-      const { data, error } = await supabase.rpc('global_ranking');
-      if (error) {
-        console.error('global_ranking error:', error);
-        setErrorMsg('取得全國排行榜失敗');
-        setRanking([]);
-        return;
+  /** 取得全國學校排行榜（global_ranking），回傳資料給呼叫者去塞 state */
+  const fetchGlobalRanking = useCallback(
+    async (options?: { asRefresh?: boolean }): Promise<RankingItem[] | null> => {
+      const isRefresh = options?.asRefresh;
+
+      if (isRefresh) setRefreshing(true);
+      else setLoading(true);
+
+      setErrorMsg(null);
+
+      try {
+        const { data, error } = await supabase.rpc('global_ranking');
+        if (error) {
+          console.error('global_ranking error:', error);
+          setErrorMsg('取得全國排行榜失敗');
+          return null;
+        }
+
+        const rows = (data || []) as GlobalRankingRow[];
+
+        const items: RankingItem[] = rows.map((row) => ({
+          rank: row.rank,
+          label: row.school_name ?? row.school_code ?? '未知學校',
+          seconds: row.total_seconds ?? 0,
+          subtitle: row.user_count != null ? `${row.user_count} 位使用者` : null,
+        }));
+
+        return items;
+      } finally {
+        if (isRefresh) setRefreshing(false);
+        else setLoading(false);
       }
+    },
+    []
+  );
 
-      const rows = (data || []) as GlobalRankingRow[];
+  /** 查出自己的 school_code，再呼叫 school_ranking，回傳 RankingItem 陣列 */
+  const fetchSchoolRanking = useCallback(
+    async (options?: { asRefresh?: boolean }): Promise<RankingItem[] | null> => {
+      const isRefresh = options?.asRefresh;
 
-      const items: RankingItem[] = rows.map((row) => ({
-        rank: row.rank,
-        label: row.school_name ?? row.school_code ?? '未知學校',
-        seconds: row.total_seconds ?? 0,
-        subtitle: row.user_count != null ? `${row.user_count} 位使用者` : null,
-      }));
+      if (isRefresh) setRefreshing(true);
+      else setLoading(true);
 
-      setRanking(items);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+      setErrorMsg(null);
 
-  /** 先從 user_school_view 找出自己的 school_code，再叫 school_ranking */
-  const fetchSchoolRanking = useCallback(async () => {
-    if (!user) {
-      setErrorMsg('尚未登入，無法查看校內排行');
-      setRanking([]);
-      return;
-    }
+      try {
+        if (!user) {
+          setErrorMsg('尚未登入，無法查看校內排行');
+          return null;
+        }
 
-    setLoading(true);
-    setErrorMsg(null);
-    try {
-      // 1️⃣ 先查 user_school_view 取得自己學校代碼
-      const { data: schoolRow, error: schoolError } = await supabase
-        .from('user_school_view')
-        .select('school_code, school_name')
-        .eq('user_id', user.id)
-        .maybeSingle();
+        // 1️⃣ 先查 user_school_view 取得自己學校代碼
+        const { data: schoolRow, error: schoolError } = await supabase
+          .from('user_school_view')
+          .select('school_code, school_name')
+          .eq('user_id', user.id)
+          .maybeSingle();
 
-      if (schoolError) {
-        console.error('user_school_view error:', schoolError);
-        setErrorMsg('無法判斷你的學校資訊');
-        setRanking([]);
-        return;
+        if (schoolError) {
+          console.error('user_school_view error:', schoolError);
+          setErrorMsg('無法判斷你的學校資訊');
+          return null;
+        }
+
+        if (!schoolRow || !schoolRow.school_code) {
+          setErrorMsg('你的 email 無法對應到任何學校');
+          return null;
+        }
+
+        const schoolCode = schoolRow.school_code as string;
+
+        // 2️⃣ 用 school_code 呼叫校內排行榜 RPC
+        const { data, error } = await supabase.rpc('school_ranking', {
+          p_school_code: schoolCode,
+        });
+
+        if (error) {
+          console.error('school_ranking error:', error);
+          setErrorMsg('取得校內排行榜失敗');
+          return null;
+        }
+
+        const rows = (data || []) as SchoolRankingRow[];
+
+        const items: RankingItem[] = rows.map((row) => ({
+          rank: row.rank,
+          label: row.email?.split('@')[0] ?? '未知使用者',
+          seconds: row.total_seconds ?? 0,
+          subtitle: row.school_name ?? schoolRow.school_name ?? null,
+        }));
+
+        return items;
+      } finally {
+        if (isRefresh) setRefreshing(false);
+        else setLoading(false);
       }
+    },
+    [user]
+  );
 
-      if (!schoolRow || !schoolRow.school_code) {
-        setErrorMsg('你的 email 無法對應到任何學校');
-        setRanking([]);
-        return;
-      }
-
-      const schoolCode = schoolRow.school_code as string;
-
-      // 2️⃣ 用 school_code 呼叫校內排行榜 RPC
-      const { data, error } = await supabase.rpc('school_ranking', {
-        p_school_code: schoolCode,
-      });
-
-      if (error) {
-        console.error('school_ranking error:', error);
-        setErrorMsg('取得校內排行榜失敗');
-        setRanking([]);
-        return;
-      }
-
-      const rows = (data || []) as SchoolRankingRow[];
-
-      const items: RankingItem[] = rows.map((row) => ({
-        rank: row.rank,
-        label: row.email?.split('@')[0] ?? '未知使用者',
-        seconds: row.total_seconds ?? 0,
-        subtitle: row.school_name ?? schoolRow.school_name ?? null,
-      }));
-
-      setRanking(items);
-    } finally {
-      setLoading(false);
-    }
-  }, [user]);
-
-  /** 每次 mode 改變就重新抓資料 */
+  /** ✅ 第一次進入畫面：只載入一次「校內」排行並存快取 */
   useEffect(() => {
-    if (mode === 'global') {
-      fetchGlobalRanking();
+    (async () => {
+      if (!schoolRanking) {
+        const items = await fetchSchoolRanking();
+        if (items) {
+          setSchoolRanking(items);
+          setRanking(items);
+        }
+      } else {
+        // 如果已經有快取（理論上初次不會發生），直接用
+        setRanking(schoolRanking);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // 只在 mount 時執行一次
+
+  /** ✅ 切換「校內 / 全國」時：
+   *  - 若該模式有快取 -> 直接使用快取，不打 API
+   *  - 若沒有快取 -> 打一次 API，並存到快取
+   */
+  const handleChangeMode = (nextMode: 'school' | 'global') => {
+    if (nextMode === mode) return;
+
+    setMode(nextMode);
+
+    if (nextMode === 'global') {
+      if (globalRanking) {
+        setRanking(globalRanking);
+      } else {
+        (async () => {
+          const items = await fetchGlobalRanking();
+          if (items) {
+            setGlobalRanking(items);
+            setRanking(items);
+          }
+        })();
+      }
     } else {
-      fetchSchoolRanking();
+      if (schoolRanking) {
+        setRanking(schoolRanking);
+      } else {
+        (async () => {
+          const items = await fetchSchoolRanking();
+          if (items) {
+            setSchoolRanking(items);
+            setRanking(items);
+          }
+        })();
+      }
     }
-  }, [mode, fetchGlobalRanking, fetchSchoolRanking]);
+  };
 
-  useEffect(() => {
-    if (isFocused) {
-      void refreshCoins();  // ⭐ 每次進入頁面刷新 coins
+  /** ✅ 下拉更新：依目前模式重新抓，並覆蓋快取 */
+  const handleRefresh = () => {
+    if (mode === 'global') {
+      (async () => {
+        const items = await fetchGlobalRanking({ asRefresh: true });
+        if (items) {
+          setGlobalRanking(items);
+          setRanking(items);
+        }
+      })();
+    } else {
+      (async () => {
+        const items = await fetchSchoolRanking({ asRefresh: true });
+        if (items) {
+          setSchoolRanking(items);
+          setRanking(items);
+        }
+      })();
     }
-  }, [isFocused, refreshCoins]);
+  };
 
   return (
     <ScreenContainer>
@@ -168,7 +255,7 @@ export const GuildScreen: React.FC = () => {
         <View style={styles.modeSwitchContainer}>
           <TouchableOpacity
             style={[styles.switchButton, mode === 'school' && styles.activeButton]}
-            onPress={() => setMode('school')}
+            onPress={() => handleChangeMode('school')}
           >
             <Text style={[styles.switchText, mode === 'school' && styles.activeText]}>
               校內
@@ -177,7 +264,7 @@ export const GuildScreen: React.FC = () => {
 
           <TouchableOpacity
             style={[styles.switchButton, mode === 'global' && styles.activeButton]}
-            onPress={() => setMode('global')}
+            onPress={() => handleChangeMode('global')}
           >
             <Text style={[styles.switchText, mode === 'global' && styles.activeText]}>
               全國
@@ -186,11 +273,9 @@ export const GuildScreen: React.FC = () => {
         </View>
 
         {/* ⭐ 錯誤訊息 */}
-        {errorMsg && (
-          <Text style={styles.errorText}>{errorMsg}</Text>
-        )}
+        {errorMsg && <Text style={styles.errorText}>{errorMsg}</Text>}
 
-        {/* ⭐ Loading */}
+        {/* ⭐ 初次載入 / 首次切某模式時的 Loading */}
         {loading && (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={COLORS.black} />
@@ -198,7 +283,7 @@ export const GuildScreen: React.FC = () => {
           </View>
         )}
 
-        {/* ⭐ 排行榜 */}
+        {/* ⭐ 排行榜 + 下拉更新（平常只動這個） */}
         {!loading && (
           <FlatList
             data={ranking}
@@ -216,6 +301,9 @@ export const GuildScreen: React.FC = () => {
                 <Text style={styles.time}>{formatSeconds(item.seconds)}</Text>
               </View>
             )}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+            }
             ListEmptyComponent={
               !loading ? (
                 <Text style={{ textAlign: 'center', marginTop: 16 }}>
