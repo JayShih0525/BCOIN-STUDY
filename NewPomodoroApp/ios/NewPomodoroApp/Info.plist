@@ -53,13 +53,15 @@
 	<string>需要使用相機來套用濾鏡效果</string>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>我們需要權限存取相簿</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
-		<key>CFBundleURLSchemes</key>
-		<array>
-			<string>NewPomodoroApp</string>
-		</array>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>NewPomodoroApp</string>
+			</array>
 		</dict>
 	</array>
 </dict>
