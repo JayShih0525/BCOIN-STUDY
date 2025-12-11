@@ -1,8 +1,8 @@
+// App.tsx
+
 /**
  * Pomodoro Timer App
  * SEP_Ponodoro
- *
- * @format
  */
 
 import React from 'react';
@@ -13,11 +13,15 @@ import { TabNavigator } from './src/navigation';
 import { TimeRecordsProvider } from './src/context';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import AuthScreen from './src/screens/AuthScreen';
-import { FilterCameraScreen } from './src/screens/FilterCameraScreen'; 
+import { FilterCameraScreen } from './src/screens/FilterCameraScreen';
 import { CoinsProvider } from './src/context/CoinsContext';
+import { SchoolDetailScreen } from './src/screens/SchoolDetailScreen';
+import { ChatScreen } from './src/screens/ChatScreen';
 
+import type { RootStackParamList } from './src/types/navigation';
 
-const Stack = createNativeStackNavigator();
+// ✅ 加上泛型
+const Stack = createNativeStackNavigator<RootStackParamList>();
 
 /** 🔹 未登入時的 Stack（只放登入畫面） */
 function AuthStack() {
@@ -28,15 +32,19 @@ function AuthStack() {
   );
 }
 
-/** 🔹 已登入時的 Stack：Tab + FilterCamera */
+/** 🔹 已登入時的 Stack：Tab + 其他頁面 */
 function MainStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      {/* 這個畫面裡面就是底部四個 Tab：日誌 / 砍樹 / 公會 / 商店 */}
+      {/* 底部四個 Tab：日誌 / 砍樹 / 公會 / 商店 */}
       <Stack.Screen name="Tabs" component={TabNavigator} />
 
-      {/* 從 Shop 進來的濾鏡相機頁面，不會出現在 TabBar 上 */}
+      {/* 從 Shop 進來的濾鏡相機頁面 */}
       <Stack.Screen name="FilterCamera" component={FilterCameraScreen} />
+      {/* 從 Guild 進來的校內成員清單頁面 */}
+      <Stack.Screen name="SchoolDetail" component={SchoolDetailScreen} />
+      {/* 單一聊天頁面 */}
+      <Stack.Screen name="Chat" component={ChatScreen} />
     </Stack.Navigator>
   );
 }
@@ -46,7 +54,6 @@ function AppNavigation() {
 
   return (
     <NavigationContainer>
-      {/* 有登入 -> 進 MainStack；沒登入 -> 進 AuthStack */}
       {session && session.user ? <MainStack /> : <AuthStack />}
     </NavigationContainer>
   );

@@ -13,8 +13,17 @@ export type RootTabParamList = {
 };
 
 export type RootStackParamList = {
+  Auth: undefined;
   Tabs: undefined;
   FilterCamera: { filterId?: string } | undefined;
+  SchoolDetail: {
+    schoolCode: string;
+    schoolName: string;
+  };
+  Chat: {
+    targetUserId: string;
+    targetUserName: string;
+  };
 };
 
 export type TabScreenName = keyof RootTabParamList;
