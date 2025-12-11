@@ -5,7 +5,7 @@
  * SEP_Ponodoro
  */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
@@ -17,6 +17,8 @@ import { FilterCameraScreen } from './src/screens/FilterCameraScreen';
 import { CoinsProvider } from './src/context/CoinsContext';
 import { SchoolDetailScreen } from './src/screens/SchoolDetailScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
+import { UnreadProvider } from './src/context/UnreadContext';
+import { connectChatServer, disconnectChatServer } from './src/utils/chatClient';
 
 import type { RootStackParamList } from './src/types/navigation';
 
@@ -51,10 +53,36 @@ function MainStack() {
 
 function AppNavigation() {
   const { session } = useAuth(); // 用 session 判斷是否登入
+  const userId = session?.user?.id;
+
+  // ⭐ 有登入時嘗試連線聊天 server，失敗也沒關係
+  useEffect(() => {
+    if (!userId) {
+      // 沒登入 or 登出 → 斷線
+      disconnectChatServer();
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      const ok = await connectChatServer(userId);
+      if (!ok) {
+        console.log('[Chat] 無法連線聊天伺服器，但 app 照常使用');
+      } else if (!cancelled) {
+        console.log('[Chat] 聊天伺服器連線成功');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      disconnectChatServer();
+    };
+  }, [userId]);
 
   return (
     <NavigationContainer>
-      {session && session.user ? <MainStack /> : <AuthStack />}
+      {userId ? <MainStack /> : <AuthStack />}
     </NavigationContainer>
   );
 }
@@ -64,7 +92,9 @@ function App() {
     <AuthProvider>
       <TimeRecordsProvider>
         <CoinsProvider>
-          <AppNavigation />
+          <UnreadProvider>
+            <AppNavigation />
+          </UnreadProvider>
         </CoinsProvider>
       </TimeRecordsProvider>
     </AuthProvider>

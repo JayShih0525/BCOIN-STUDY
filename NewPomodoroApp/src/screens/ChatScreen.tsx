@@ -1,6 +1,6 @@
 // src/screens/ChatScreen.tsx
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -10,60 +10,165 @@ import {
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
 } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { ScreenContainer, TopBar } from '../components';
 import { useAuth } from '../context/AuthContext';
 import { useCoinsContext } from '../context/CoinsContext';
-import type { RootStackParamList } from '../types/navigation';
+import { useUnread } from '../context/UnreadContext';
 import { COLORS, FONT_SIZES, FONT_WEIGHTS, SPACING } from '../constants/theme';
-// Import Vector Icons
+import type { RootStackParamList } from '../types/navigation';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { supabase } from '../lib/supabase';
+import {
+  connectChatServer,
+  sendChatMessage,
+  addChatListener,
+  removeChatListener,
+} from '../utils/chatClient';
 
 type ChatRouteProp = RouteProp<RootStackParamList, 'Chat'>;
 
 type ChatMessage = {
   id: string;
+  roomId: string;
+  senderId: string;
+  content: string;
+  createdAt: string;
   fromMe: boolean;
-  text: string;
-  timestamp: string; // Added timestamp for visual flair
 };
 
 export const ChatScreen: React.FC = () => {
   const route = useRoute<ChatRouteProp>();
   const navigation = useNavigation();
-  const { targetUserName } = route.params;
+  const { targetUserId, targetUserName } = route.params;
 
   const { user, signOut } = useAuth();
   const { coins } = useCoinsContext();
+  const { clearRoomUnread } = useUnread();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  
-  // Ref to auto-scroll to bottom
-  const flatListRef = useRef<FlatList>(null);
+  const flatListRef = useRef<FlatList<ChatMessage>>(null);
 
-  const handleSend = () => {
-    if (!input.trim()) return;
+  const roomId = useMemo(() => {
+    if (!user) return '';
+    return [user.id, targetUserId].sort().join('_');
+  }, [user, targetUserId]);
 
-    const now = new Date();
-    const timeString = now.getHours() + ':' + String(now.getMinutes()).padStart(2, '0');
-
-    const newMsg: ChatMessage = {
-      id: Date.now().toString(),
-      fromMe: true,
-      text: input.trim(),
-      timestamp: timeString,
-    };
-
-    setMessages(prev => [...prev, newMsg]);
-    setInput('');
+  const formatTime = (iso: string) => {
+    const d = new Date(iso);
+    const h = d.getHours().toString().padStart(2, '0');
+    const m = d.getMinutes().toString().padStart(2, '0');
+    return `${h}:${m}`;
   };
 
-  // Auto-scroll when messages change
+  const sendMarkRead = useCallback(
+    (lastMessageId: string) => {
+      if (!user || !roomId || !lastMessageId) return;
+      const payload = {
+        type: 'MARK_READ',
+        roomId,
+        userId: user.id,
+        lastReadMessageId: lastMessageId,
+      };
+      sendChatMessage(payload);
+    },
+    [user, roomId],
+  );
+
+  const loadHistory = useCallback(async () => {
+    if (!user || !roomId) return;
+
+    const { data, error } = await supabase
+      .from('chat_messages')
+      .select('id, room_id, sender_id, content, created_at')
+      .eq('room_id', roomId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.log('[ChatScreen] loadHistory error:', error);
+      return;
+    }
+
+    const rows = data ?? [];
+    const mapped: ChatMessage[] = rows.map((row: any) => ({
+      id: row.id,
+      roomId: row.room_id,
+      senderId: row.sender_id,
+      content: row.content,
+      createdAt: row.created_at,
+      fromMe: row.sender_id === user.id,
+    }));
+
+    setMessages(mapped);
+
+    if (mapped.length > 0) {
+      const last = mapped[mapped.length - 1];
+      sendMarkRead(last.id);
+      clearRoomUnread(roomId);
+    }
+  }, [user, roomId, clearRoomUnread, sendMarkRead]);
+
+  const handleSend = () => {
+    if (!user || !roomId) return;
+    if (!input.trim()) return;
+
+    const payload = {
+      type: 'SEND_MESSAGE',
+      roomId,
+      senderId: user.id,
+      content: input.trim(),
+    };
+
+    sendChatMessage(payload);
+    setInput('');
+    
+    // 注意：這裡不需要手動 scrollToEnd，因為我們會靠 useEffect 或 onContentSizeChange 自動處理
+  };
+
+  useEffect(() => {
+    if (!user || !roomId) return;
+
+    connectChatServer(user.id);
+
+    const listener = (msg: any) => {
+      if (!msg || typeof msg !== 'object') return;
+      if (msg.type === 'MESSAGE' && msg.roomId === roomId) {
+        const fromMe = msg.senderId === user.id;
+        const newMsg: ChatMessage = {
+          id: msg.messageId,
+          roomId: msg.roomId,
+          senderId: msg.senderId,
+          content: msg.content,
+          createdAt: msg.createdAt,
+          fromMe,
+        };
+
+        setMessages((prev) => [...prev, newMsg]);
+
+        // 在這個聊天室 → 直接標記已讀
+        sendMarkRead(msg.messageId);
+        clearRoomUnread(roomId);
+      }
+    };
+
+    addChatListener(listener);
+    return () => {
+      removeChatListener(listener);
+    };
+  }, [user, roomId, sendMarkRead, clearRoomUnread]);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
+  // ✅ 核心修改：當 messages 變動時，自動捲動到底部
+  // 無論是自己發送 (handleSend 更新了 messages) 還是收到訊息 (listener 更新了 messages)
+  // 這個 Effect 都會觸發
   useEffect(() => {
     if (messages.length > 0) {
+      // 使用 setTimeout 確保畫面渲染完成後再捲動，避免捲動位置不準確
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 100);
@@ -78,7 +183,6 @@ export const ChatScreen: React.FC = () => {
     <ScreenContainer>
       <TopBar coins={coins} onSettingsPress={signOut} />
 
-      {/* Custom Chat Header */}
       <View style={styles.chatHeader}>
         <TouchableOpacity onPress={handleGoBack} style={styles.backButton}>
           <Ionicons name="chevron-back" size={24} color={COLORS.black} />
@@ -89,7 +193,7 @@ export const ChatScreen: React.FC = () => {
           </View>
           <View>
             <Text style={styles.headerTitle}>{targetUserName}</Text>
-            <Text style={styles.headerStatus}>Online</Text>
+            <Text style={styles.headerStatus}>Chat</Text>
           </View>
         </View>
       </View>
@@ -104,7 +208,11 @@ export const ChatScreen: React.FC = () => {
           style={styles.messageList}
           contentContainerStyle={styles.messageListContent}
           data={messages}
-          keyExtractor={item => item.id}
+          keyExtractor={(item) => item.id}
+          // ✅ 核心修改：當內容高度改變（例如新訊息加入導致列表變長）時，自動捲到底部
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+          // ✅ 核心修改：當佈局改變（例如鍵盤彈出）時，也嘗試捲動
+          onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
           renderItem={({ item }) => (
             <View
               style={[
@@ -124,10 +232,15 @@ export const ChatScreen: React.FC = () => {
                     item.fromMe ? styles.meText : styles.otherText,
                   ]}
                 >
-                  {item.text}
+                  {item.content}
                 </Text>
-                <Text style={[styles.timestamp, item.fromMe ? styles.meTimestamp : styles.otherTimestamp]}>
-                  {item.timestamp}
+                <Text
+                  style={[
+                    styles.timestamp,
+                    item.fromMe ? styles.meTimestamp : styles.otherTimestamp,
+                  ]}
+                >
+                  {formatTime(item.createdAt)}
                 </Text>
               </View>
             </View>
@@ -140,7 +253,6 @@ export const ChatScreen: React.FC = () => {
           }
         />
 
-        {/* Input Area */}
         <View style={styles.inputContainer}>
           <TextInput
             style={styles.input}
@@ -150,9 +262,13 @@ export const ChatScreen: React.FC = () => {
             placeholderTextColor="#9CA3AF"
             multiline
             maxLength={500}
+            // ✅ 優化：當開始輸入時（鍵盤彈起），也可以觸發捲動
+            onFocus={() => {
+                setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100)
+            }}
           />
-          <TouchableOpacity 
-            style={[styles.sendButton, !input.trim() && styles.sendButtonDisabled]} 
+          <TouchableOpacity
+            style={[styles.sendButton, !input.trim() && styles.sendButtonDisabled]}
             onPress={handleSend}
             disabled={!input.trim()}
           >
@@ -165,13 +281,11 @@ export const ChatScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  // Main Layout
+  // ... 樣式保持不變
   keyboardContainer: {
     flex: 1,
-    backgroundColor: '#F9FAFB', // Light gray background for chat area
+    backgroundColor: '#F9FAFB',
   },
-  
-  // Custom Header
   chatHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -210,11 +324,10 @@ const styles = StyleSheet.create({
   },
   headerStatus: {
     fontSize: 12,
-    color: '#10B981', // Green for online
+    color: '#10B981',
     fontWeight: '500',
   },
 
-  // Message List
   messageList: {
     flex: 1,
   },
@@ -234,7 +347,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 
-  // Message Bubbles
   messageBubbleWrapper: {
     marginVertical: 4,
     width: '100%',
@@ -250,7 +362,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 20,
-    // Shadows for depth
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
@@ -258,12 +369,12 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   meBubble: {
-    backgroundColor: COLORS.secondary, // Or use a nice blue like #3B82F6
-    borderBottomRightRadius: 4, // Visual flair
+    backgroundColor: COLORS.secondary,
+    borderBottomRightRadius: 4,
   },
   otherBubble: {
     backgroundColor: '#FFFFFF',
-    borderBottomLeftRadius: 4, // Visual flair
+    borderBottomLeftRadius: 4,
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
@@ -289,10 +400,9 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
   },
 
-  // Input Area
   inputContainer: {
     flexDirection: 'row',
-    alignItems: 'flex-end', // Align bottom for multiline
+    alignItems: 'flex-end',
     paddingHorizontal: SPACING.md,
     paddingVertical: 12,
     backgroundColor: '#FFFFFF',
@@ -305,10 +415,9 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     paddingHorizontal: 16,
     paddingVertical: 10,
-    paddingRight: 16,
     fontSize: 15,
     color: '#1F2937',
-    maxHeight: 100, // Limit height for multiline
+    maxHeight: 100,
     marginRight: 10,
   },
   sendButton: {
