@@ -103,7 +103,7 @@ export const ChatScreen: React.FC = () => {
   const { user, signOut } = useAuth();
   const { coins, refresh } = useCoinsContext();
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { clearRoomUnread } = useUnread();
+  const { setActiveRoomId, clearRoomUnread, unread } = useUnread();
 
   // --- State ---
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -142,6 +142,21 @@ export const ChatScreen: React.FC = () => {
   // ------------------------------------------------------
   // 核心 Effect
   // ------------------------------------------------------
+
+  useEffect(() => {
+    if (roomId) {
+      // 1. 進入頁面：告訴 Context 我在這個房間 (擋住震動)
+      setActiveRoomId(roomId);
+      // 2. 順便清除這個房間原本的紅點
+      clearRoomUnread(roomId);
+    }
+
+    // 3. 離開頁面 (Unmount)：清除活躍狀態
+    return () => {
+      setActiveRoomId(null);
+    };
+  }, [roomId, setActiveRoomId, clearRoomUnread]);
+
   useEffect(() => {
     if (!user || !roomId) return;
 
@@ -504,7 +519,11 @@ export const ChatScreen: React.FC = () => {
   return (
     // ✅ 改回 ScreenContainer，這是你原本的排版邏輯
     <ScreenContainer>
-      <TopBar coins={coins} onSettingsPress={signOut} />
+      <TopBar 
+        coins={coins} 
+        onSettingsPress={signOut}
+        unreadCount={unread.total}
+      />
 
       {/* Header */}
       <View style={styles.chatHeader}>

@@ -20,6 +20,7 @@ import { RootTabParamList } from '../types/navigation';
 import { COLORS, FONT_SIZES, FONT_WEIGHTS, SPACING } from '../constants/theme';
 import { TimeRecord } from '../types/timeRecord';
 import { useAuth } from '../context/AuthContext';
+import { useUnread } from '../context/UnreadContext';     // 用來拿未讀數字
 
 type ForestScreenRouteProp = RouteProp<RootTabParamList, 'Forest'>;
 
@@ -28,6 +29,7 @@ export const ForestScreen: React.FC = () => {
   const navigation = useNavigation();
   const isFocused = useIsFocused();
   const { signOut, user } = useAuth();
+  const { unread } = useUnread();
 
   const {
     minutes,
@@ -200,7 +202,11 @@ export const ForestScreen: React.FC = () => {
 
   return (
     <ScreenContainer>
-      <TopBar coins={coins} onSettingsPress={signOut} />
+      <TopBar 
+        coins={coins} 
+        onSettingsPress={signOut}
+        unreadCount={unread.total}
+      />
 
       <View style={styles.container}>
         {displayTask && (

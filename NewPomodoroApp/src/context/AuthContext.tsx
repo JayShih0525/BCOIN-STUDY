@@ -79,7 +79,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const { error } = await supabase.auth.signOut();
 
     if (error) {
-      Alert.alert('登出錯誤', error.message);
+      setSession(null);
+      setUser(null);
+      // Alert.alert('登出錯誤', error.message);
     } else {
       // ⭐ 完全清除本地 session / user
       setSession(null);

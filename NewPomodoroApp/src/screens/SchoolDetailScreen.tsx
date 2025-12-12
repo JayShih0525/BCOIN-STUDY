@@ -21,6 +21,7 @@ import type { RootStackParamList } from '../types/navigation';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 // 1. Import Ionicons
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { useUnread } from '../context/UnreadContext';     // 用來拿未讀數字
 
 type SchoolDetailRouteProp = RouteProp<RootStackParamList, 'SchoolDetail'>;
 type SchoolDetailNavProp = NativeStackNavigationProp<
@@ -63,6 +64,7 @@ export const SchoolDetailScreen: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState(''); 
+  const { unread } = useUnread();
 
   const formatSeconds = (sec: number | null | undefined) => {
     const total = Math.max(0, Math.floor(sec ?? 0));
@@ -195,7 +197,11 @@ export const SchoolDetailScreen: React.FC = () => {
 
   return (
     <ScreenContainer>
-      <TopBar coins={coins} onSettingsPress={signOut} />
+      <TopBar 
+        coins={coins} 
+        onSettingsPress={signOut}
+        unreadCount={unread.total}
+      />
 
       <View style={styles.container}>
         

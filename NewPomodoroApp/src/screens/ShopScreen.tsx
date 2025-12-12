@@ -23,6 +23,7 @@ import { useShopItems } from '../hooks/useShopItems';
 import { ShopItem } from '../constants/shop';
 import { COLORS, FONT_SIZES, FONT_WEIGHTS, SPACING } from '../constants/theme';
 import { supabase } from '../lib/supabase';
+import { useUnread } from '../context/UnreadContext';     // 用來拿未讀數字
 
 type ShopNavProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -41,6 +42,8 @@ export const ShopScreen: React.FC = () => {
   } = useCoinsContext();
 
   const navigation = useNavigation<ShopNavProp>();
+
+  const { unread } = useUnread();
 
   // 1️⃣ 資料庫商品列表（透過 hook）
   const { items: shopItems, loading: shopLoading } = useShopItems();
@@ -172,7 +175,11 @@ export const ShopScreen: React.FC = () => {
 
   return (
     <ScreenContainer>
-      <TopBar coins={coins} onSettingsPress={signOut} />
+      <TopBar 
+        coins={coins} 
+        onSettingsPress={signOut}
+        unreadCount={unread.total}
+      />
 
       <View style={styles.container}>
         <View style={styles.headerContainer}>

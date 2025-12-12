@@ -35,9 +35,61 @@ public class ChatServer {
         serverSocket = new ServerSocket(port);
     }
 
+    private static String getLocalIP() {
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+
+            String candidate = null; 
+
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface iface = interfaces.nextElement();
+
+                if (!iface.isUp() || iface.isLoopback() || iface.isVirtual()) {
+                    continue;
+                }
+
+                String name = iface.getName();
+                boolean isWifi = name.startsWith("en") || name.startsWith("wl");
+
+                Enumeration<InetAddress> addresses = iface.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress addr = addresses.nextElement();
+
+                    if (!(addr instanceof Inet4Address)) continue;
+
+                    String ip = addr.getHostAddress();
+
+                    if (ip.startsWith("169.254.")) continue;
+
+                    if (isWifi) {
+                        System.out.println("[IP] 使用 Wi-Fi 介面 " + name + " → " + ip);
+                        return ip;
+                    }
+
+                    if (candidate == null && addr.isSiteLocalAddress()) {
+                        candidate = ip;
+                    }
+                }
+            }
+
+            if (candidate != null) {
+                System.out.println("[IP] 使用備用 LAN IP → " + candidate);
+                return candidate;
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        System.out.println("[IP] 找不到合適的 IPv4，使用 127.0.0.1");
+        return "127.0.0.1";
+    }
+
     public static void main(String[] args) {
         try {
             ChatServer server = new ChatServer(PORT);
+            // System.out.println(getLocalIP());
+            getLocalIP();
             System.out.println("ChatServer running on port " + PORT + "...");
             server.start();
         } catch (IOException e) {
@@ -250,7 +302,7 @@ public class ChatServer {
             members = dbMembers.toArray(new String[0]);
         }
 
-        System.out.println("Broadcasting msg to room: " + roomId + ", members: " + Arrays.toString(members));
+        // System.out.println("Broadcasting msg to room: " + roomId + ", members: " + Arrays.toString(members));
 
         // 3. 發送給所有在線成員 (包含自己)
         for (String targetUid : members) {
@@ -585,5 +637,6 @@ public class ChatServer {
             try { if (out != null) out.close(); } catch (Exception ignored) {}
             try { socket.close(); } catch (Exception ignored) {}
         }
+
     }
 }

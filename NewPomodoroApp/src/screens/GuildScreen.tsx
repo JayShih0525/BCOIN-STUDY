@@ -23,6 +23,7 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types/navigation';
+import { useUnread } from '../context/UnreadContext';     // 用來拿未讀數字
 
 type GuildNavProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -61,6 +62,8 @@ export const GuildScreen: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const { unread } = useUnread();
 
   // 2. Add Search State
   const [searchQuery, setSearchQuery] = useState('');
@@ -162,7 +165,11 @@ export const GuildScreen: React.FC = () => {
 
   return (
     <ScreenContainer>
-      <TopBar coins={coins} onSettingsPress={signOut} />
+      <TopBar 
+        coins={coins} 
+        onSettingsPress={signOut}
+        unreadCount={unread.total}
+      />
 
       <View style={styles.container}>
         {/* 標題區域 */}
