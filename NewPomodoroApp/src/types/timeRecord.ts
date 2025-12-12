@@ -9,6 +9,8 @@ export interface TimeRecord {
     name: string;
     startTime: Date;
     endTime: Date;
+    startTimeISO: string;   // ✅ string
+    endTimeISO?: string;    // ✅ string | undefined
     executedSeconds: number; // 已執行的總秒數
 }
 

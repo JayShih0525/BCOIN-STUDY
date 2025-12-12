@@ -28,7 +28,7 @@ const TAB_CONFIG = [
   {
     name: 'Guild' as const,
     component: GuildScreen,
-    label: '公會',
+    label: '學校',
     icon: '👥',
   },
   {

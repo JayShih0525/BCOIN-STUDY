@@ -43,9 +43,19 @@ export const CalendarScreen: React.FC = () => {
         setSheetVisible(true);
     };
 
+    // const handlePressRecord = (record: TimeRecord) => {
+    //     // 導航到番茄鐘頁面，帶入此任務
+    //     navigation.navigate('Forest', { activeTask: record });
+    // };
     const handlePressRecord = (record: TimeRecord) => {
-        // 導航到番茄鐘頁面，帶入此任務
-        navigation.navigate('Forest', { activeTask: record });
+        navigation.navigate('Forest', {
+            activeTask: {
+                ...record,
+                // ✅ Date -> string（讓 params 可序列化）
+                startTime: record.startTime.toISOString(),
+                endTime: record.endTime ? record.endTime.toISOString() : undefined,
+            },
+        } as any);
     };
 
     const handleEditRecord = (record: TimeRecord) => {

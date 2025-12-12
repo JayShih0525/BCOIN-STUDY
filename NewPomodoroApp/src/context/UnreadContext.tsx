@@ -1,5 +1,9 @@
 // src/context/UnreadContext.tsx
-import React, { createContext, useContext, useState } from 'react';
+
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { Vibration } from 'react-native'; // 1. 引入震動 API
+import { useAuth } from './AuthContext';    // 2. 引入 Auth 取得 user.id
+import { chatClient } from '../utils/chatClient'; // 3. 引入 Socket 監聽
 
 type UnreadState = {
   total: number;
@@ -18,6 +22,7 @@ type UnreadContextValue = {
 const UnreadContext = createContext<UnreadContextValue | null>(null);
 
 export const UnreadProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth(); // 取得當前使用者
   const [unread, setUnreadState] = useState<UnreadState>({ total: 0, perRoom: {} });
 
   const recomputeTotal = (perRoom: Record<string, number>) =>
@@ -61,6 +66,40 @@ export const UnreadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       };
     });
   };
+
+  // ============================================================
+  // ★ 新增：全域訊息震動監聽
+  // ============================================================
+  useEffect(() => {
+    if (!user) return;
+
+    const handleMessageVibration = (msg: any) => {
+      if (!msg || typeof msg !== 'object') return;
+
+      // 1. 判斷是否為新訊息
+      if (msg.type === 'MESSAGE') {
+        
+        // 2. 判斷發送者不是我自己 (別人傳給我才震動)
+        if (msg.senderId !== user.id) {
+          console.log('[UnreadContext] 收到新訊息，震動通知！');
+          
+          // 3. 觸發震動
+          // Android: 預設震動 400ms
+          // iOS: 觸發系統預設震動
+          Vibration.vibrate(); 
+        }
+      }
+    };
+
+    // 註冊監聽
+    chatClient.addChatListener(handleMessageVibration);
+
+    // 移除監聽
+    return () => {
+      chatClient.removeChatListener(handleMessageVibration);
+    };
+  }, [user]);
+  // ============================================================
 
   return (
     <UnreadContext.Provider

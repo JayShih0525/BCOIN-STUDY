@@ -7,19 +7,20 @@ import {
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  ActivityIndicator,
   Alert,
   RefreshControl,
-  TextInput, // <--- 1. Import TextInput
+  TextInput,
 } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { ScreenContainer, TopBar } from '../components';
 import { useAuth } from '../context/AuthContext';
 import { useCoinsContext } from '../context/CoinsContext';
-import { COLORS, FONT_SIZES, FONT_WEIGHTS, SPACING } from '../constants/theme';
+import { COLORS, FONT_SIZES, SPACING } from '../constants/theme';
 import { supabase } from '../lib/supabase';
 import type { RootStackParamList } from '../types/navigation';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+// 1. Import Ionicons
+import Ionicons from 'react-native-vector-icons/Ionicons';
 
 type SchoolDetailRouteProp = RouteProp<RootStackParamList, 'SchoolDetail'>;
 type SchoolDetailNavProp = NativeStackNavigationProp<
@@ -37,7 +38,6 @@ type SchoolUserRow = {
   allow_chat?: boolean | null;
 };
 
-// ... (Keep existing helper functions getRankColor, getRankTextColor, etc.) ...
 const getRankColor = (rank: number) => {
   switch (rank) {
     case 1: return '#FFD700';
@@ -62,8 +62,6 @@ export const SchoolDetailScreen: React.FC = () => {
   const [members, setMembers] = useState<SchoolUserRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  
-  // 2. Add Search State
   const [searchQuery, setSearchQuery] = useState(''); 
 
   const formatSeconds = (sec: number | null | undefined) => {
@@ -114,7 +112,6 @@ export const SchoolDetailScreen: React.FC = () => {
     void loadMembers();
   }, [loadMembers]);
 
-  // 3. Filter Logic (Filters instantly as you type)
   const filteredMembers = members.filter((member) => {
     const displayName = (member.email ?? '').split('@')[0] || '';
     const query = searchQuery.toLowerCase();
@@ -126,7 +123,6 @@ export const SchoolDetailScreen: React.FC = () => {
   };
 
   const handlePressChat = (target: SchoolUserRow) => {
-    // ... (Keep existing chat logic)
     if (!target.allow_chat) {
       Alert.alert('無法聊天', '對方尚未開啟聊天功能。');
       return;
@@ -202,12 +198,23 @@ export const SchoolDetailScreen: React.FC = () => {
       <TopBar coins={coins} onSettingsPress={signOut} />
 
       <View style={styles.container}>
+        
+        {/* 2. Modified Header Structure */}
         <View style={styles.header}>
-          <Text style={styles.title}>{schoolName}</Text>
-          <Text style={styles.subtitle}>校內專注排行榜</Text>
+          <TouchableOpacity 
+            onPress={() => navigation.goBack()} 
+            style={styles.backButton}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="chevron-back" size={28} color="#111827" />
+          </TouchableOpacity>
+          
+          <View style={styles.headerTextContainer}>
+            <Text style={styles.title}>{schoolName}</Text>
+            <Text style={styles.subtitle}>校內專注排行榜</Text>
+          </View>
         </View>
 
-        {/* 4. Add Search Bar UI */}
         <View style={styles.searchContainer}>
           <TextInput
             style={styles.searchInput}
@@ -216,12 +223,12 @@ export const SchoolDetailScreen: React.FC = () => {
             value={searchQuery}
             onChangeText={setSearchQuery}
             autoCapitalize="none"
-            clearButtonMode="while-editing" // Adds 'x' button on iOS
+            clearButtonMode="while-editing"
           />
         </View>
 
         <FlatList
-          data={filteredMembers} // <--- 5. Use filtered data
+          data={filteredMembers}
           keyExtractor={(item) => item.user_id}
           renderItem={renderItem}
           contentContainerStyle={styles.listContent}
@@ -253,16 +260,28 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F9FAFB',
   },
+  // 3. Updated Header Styles
   header: {
     paddingHorizontal: SPACING.lg,
     paddingTop: SPACING.md,
     paddingBottom: SPACING.sm,
+    flexDirection: 'row', // Make it a row
+    alignItems: 'center', // Align vertically
+  },
+  backButton: {
+    marginRight: 12, // Space between arrow and text
+    padding: 4,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6', // Optional: subtle background for button
+  },
+  headerTextContainer: {
+    flex: 1,
   },
   title: {
     fontSize: 24,
     fontWeight: '800',
     color: '#111827',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   subtitle: {
     fontSize: FONT_SIZES.md,
@@ -270,7 +289,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   
-  // 6. Add Search Bar Styles
   searchContainer: {
     paddingHorizontal: SPACING.lg,
     paddingBottom: 10,
@@ -284,7 +302,6 @@ const styles = StyleSheet.create({
     color: '#1F2937',
     borderWidth: 1,
     borderColor: '#E5E7EB',
-    // Subtle shadow
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
@@ -298,7 +315,6 @@ const styles = StyleSheet.create({
     paddingTop: 8,
   },
   
-  // ... (Keep existing card styles below exactly as they were) ...
   card: {
     flexDirection: 'row',
     alignItems: 'center',
