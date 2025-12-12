@@ -259,9 +259,9 @@ public class ChatServer {
             if (ch != null) {
                 // 如果對方在線，直接發送
                 ch.sendRaw(jsonStr);
-                System.out.println(" -> Sent to " + targetUid);
+                // System.out.println(" -> Sent to " + targetUid);
             } else {
-                System.out.println(" -> User " + targetUid + " is offline");
+                // System.out.println(" -> User " + targetUid + " is offline");
             }
         }
     }
