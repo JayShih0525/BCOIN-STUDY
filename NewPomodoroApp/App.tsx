@@ -5,6 +5,7 @@
  * SEP_Ponodoro
  */
 
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -19,7 +20,6 @@ import { SchoolDetailScreen } from './src/screens/SchoolDetailScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
 import { UnreadProvider } from './src/context/UnreadContext';
 import { connectChatServer, disconnectChatServer } from './src/utils/chatClient';
-
 import type { RootStackParamList } from './src/types/navigation';
 
 // ✅ 加上泛型
@@ -52,7 +52,7 @@ function MainStack() {
 }
 
 function AppNavigation() {
-  const { session } = useAuth(); // 用 session 判斷是否登入
+  const { session, user } = useAuth(); // 用 session 判斷是否登入
   const userId = session?.user?.id;
 
   // ⭐ 有登入時嘗試連線聊天 server，失敗也沒關係
@@ -89,15 +89,17 @@ function AppNavigation() {
 
 function App() {
   return (
-    <AuthProvider>
-      <TimeRecordsProvider>
-        <CoinsProvider>
-          <UnreadProvider>
-            <AppNavigation />
-          </UnreadProvider>
-        </CoinsProvider>
-      </TimeRecordsProvider>
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <TimeRecordsProvider>
+          <CoinsProvider>
+            <UnreadProvider>
+              <AppNavigation/>
+            </UnreadProvider>
+          </CoinsProvider>
+        </TimeRecordsProvider>
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
 

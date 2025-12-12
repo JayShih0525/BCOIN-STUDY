@@ -12,6 +12,7 @@ import {
   FlatList,
   ActivityIndicator,
   RefreshControl,
+  TextInput, // <--- 1. Import TextInput
 } from 'react-native';
 import { ScreenContainer, TopBar } from '../components';
 import { useCoinsContext } from '../context/CoinsContext';
@@ -60,6 +61,9 @@ export const GuildScreen: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // 2. Add Search State
+  const [searchQuery, setSearchQuery] = useState('');
 
   // 目前登入者的學校代碼，用來比對上色
   const [mySchoolCode, setMySchoolCode] = useState<string | null>(null);
@@ -114,7 +118,6 @@ export const GuildScreen: React.FC = () => {
   /** 第一次進入畫面：先抓自己的學校代碼，再抓全國排行 */
   useEffect(() => {
     (async () => {
-      // 先抓 user_profiles 裡自己的 school_code
       if (user) {
         const { data, error } = await supabase
           .from('user_profiles')
@@ -127,7 +130,6 @@ export const GuildScreen: React.FC = () => {
         }
       }
 
-      // 抓全國排行榜
       const items = await fetchGlobalRanking();
       if (items) {
         setRanking(items);
@@ -135,9 +137,14 @@ export const GuildScreen: React.FC = () => {
     })();
   }, [user, fetchGlobalRanking]);
 
-  /** 下拉更新 → 重新抓全國排行 */
+  // 3. Filter Logic (Instant filtering)
+  const filteredRanking = ranking.filter((item) => {
+    const query = searchQuery.toLowerCase();
+    return item.label.toLowerCase().includes(query);
+  });
+
   const handleRefresh = () => {
-    (async () => {
+    void (async () => {
       const items = await fetchGlobalRanking({ asRefresh: true });
       if (items) {
         setRanking(items);
@@ -145,10 +152,8 @@ export const GuildScreen: React.FC = () => {
     })();
   };
 
-  /** 點一列 → 進學校詳細頁 */
   const handlePressRow = (item: RankingItem) => {
     if (!item.schoolCode) return;
-
     navigation.navigate('SchoolDetail', {
       schoolCode: item.schoolCode,
       schoolName: item.label,
@@ -166,6 +171,19 @@ export const GuildScreen: React.FC = () => {
           <Text style={styles.subtitlePage}>依累積專注時間排序</Text>
         </View>
 
+        {/* 4. Search Bar UI */}
+        <View style={styles.searchContainer}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="搜尋學校名稱..."
+            placeholderTextColor="#9CA3AF"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            clearButtonMode="while-editing" // iOS 'x' button
+          />
+        </View>
+
         {/* 錯誤訊息 */}
         {errorMsg && <Text style={styles.errorText}>{errorMsg}</Text>}
 
@@ -180,9 +198,9 @@ export const GuildScreen: React.FC = () => {
         {/* 排行榜列表 */}
         {!loading && (
           <FlatList
-            data={ranking}
+            data={filteredRanking} // <--- 5. Use filtered data
             keyExtractor={(item) => `${item.rank}-${item.label}`}
-            contentContainerStyle={{ paddingBottom: 20 }} // 底部留白
+            contentContainerStyle={{ paddingBottom: 20 }}
             renderItem={({ item }) => {
               const isMySchool =
                 mySchoolCode != null &&
@@ -201,14 +219,12 @@ export const GuildScreen: React.FC = () => {
                     isMySchool && styles.mySchoolCard,
                   ]}
                 >
-                  {/* 左側：排名圓圈 */}
                   <View style={[styles.rankContainer, isTop3 && { backgroundColor: rankColor + '20' }]}>
                     <Text style={[styles.rankText, { color: rankColor }]}>
                       {item.rank}
                     </Text>
                   </View>
 
-                  {/* 中間：學校資訊 */}
                   <View style={styles.infoContainer}>
                     <View style={styles.nameRow}>
                       <Text style={styles.schoolName} numberOfLines={1}>
@@ -228,7 +244,6 @@ export const GuildScreen: React.FC = () => {
                     )}
                   </View>
 
-                  {/* 右側：時間資訊 */}
                   <View style={styles.timeContainer}>
                     <Text style={styles.timeLabel}>累積專注</Text>
                     <Text style={[styles.timeValue, isMySchool && styles.mySchoolTimeText]}>
@@ -244,7 +259,9 @@ export const GuildScreen: React.FC = () => {
             ListEmptyComponent={
               !loading ? (
                 <Text style={styles.emptyText}>
-                  目前尚無排行資料
+                  {searchQuery.length > 0 
+                    ? '找不到符合的學校' 
+                    : '目前尚無排行資料'}
                 </Text>
               ) : null
             }
@@ -260,12 +277,11 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: SPACING.lg,
     paddingTop: SPACING.md,
-    backgroundColor: '#F9FAFB', // 頁面背景改為極淡灰，突顯卡片
+    backgroundColor: '#F9FAFB',
   },
   
-  // --- 標題區域 ---
   headerContainer: {
-    marginBottom: SPACING.lg,
+    marginBottom: SPACING.md, // Reduced margin to fit search bar better
     paddingHorizontal: 4,
   },
   title: {
@@ -281,7 +297,29 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 
-  // --- 卡片通用樣式 ---
+  // --- 6. Search Bar Styles ---
+  searchContainer: {
+    paddingHorizontal: 0,
+    marginBottom: 16,
+  },
+  searchInput: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    fontSize: 16,
+    color: '#1F2937',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    // Subtle shadow
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+
+  // --- Cards ---
   card: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -290,28 +328,23 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingHorizontal: 16,
     marginBottom: 12,
-    // iOS 陰影
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 8,
-    // Android 陰影
     elevation: 2,
     borderWidth: 1,
     borderColor: '#F3F4F6',
   },
-  
-  // --- 「我的學校」特殊樣式 ---
   mySchoolCard: {
-    backgroundColor: '#FFFBEB', // 淡黃色背景
-    borderColor: '#FCD34D',     // 金黃色邊框
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FCD34D',
     shadowColor: '#F59E0B',
     shadowOpacity: 0.1,
     shadowRadius: 10,
     elevation: 4,
   },
 
-  // --- 排名圓圈 ---
   rankContainer: {
     width: 40,
     height: 40,
@@ -326,7 +359,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
 
-  // --- 中間資訊區 ---
   infoContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -350,7 +382,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 
-  // --- 「我的學校」小標籤 ---
   badge: {
     backgroundColor: '#F59E0B',
     paddingHorizontal: 6,
@@ -363,7 +394,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
 
-  // --- 右側時間區 ---
   timeContainer: {
     alignItems: 'flex-end',
     justifyContent: 'center',
@@ -386,7 +416,6 @@ const styles = StyleSheet.create({
     color: '#B45309',
   },
 
-  // --- 載入與錯誤狀態 ---
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',

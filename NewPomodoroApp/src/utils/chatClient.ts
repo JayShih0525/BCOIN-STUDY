@@ -145,6 +145,28 @@ export function disconnectChatServer() {
   buffer = '';
 }
 
+
+export function getChatHistory(roomId: string, userId: string, beforeCreatedAt?: string) {
+  const payload: any = {
+    type: 'GET_HISTORY',
+    roomId,
+    userId,
+  };
+  
+  if (beforeCreatedAt) {
+    payload.beforeCreatedAt = beforeCreatedAt;
+  }
+
+  sendJson(payload);
+}
+
+export function checkUserOnline(targetUserId: string) {
+  sendJson({
+    type: 'GET_USER_STATUS',
+    targetUserId,
+  });
+}
+
 // Shortcut export
 export const chatClient = {
   connect: connectChatServer,
@@ -153,4 +175,6 @@ export const chatClient = {
   addChatListener,
   removeChatListener,
   disconnect: disconnectChatServer,
+  getChatHistory,
+  checkUserOnline
 };

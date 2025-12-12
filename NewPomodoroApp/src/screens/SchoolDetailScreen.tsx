@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
+  TextInput, // <--- 1. Import TextInput
 } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { ScreenContainer, TopBar } from '../components';
@@ -36,21 +37,16 @@ type SchoolUserRow = {
   allow_chat?: boolean | null;
 };
 
-// Determine circle background color based on rank
+// ... (Keep existing helper functions getRankColor, getRankTextColor, etc.) ...
 const getRankColor = (rank: number) => {
   switch (rank) {
-    case 1:
-      return '#FFD700'; // Gold
-    case 2:
-      return '#C0C0C0'; // Silver
-    case 3:
-      return '#CD7F32'; // Bronze
-    default:
-      return '#1051d3ff'; // Default Blue
+    case 1: return '#FFD700';
+    case 2: return '#C0C0C0';
+    case 3: return '#CD7F32';
+    default: return '#1051d3ff';
   }
 };
 
-// Determine rank text color (White for top 3)
 const getRankTextColor = (rank: number) => {
   return rank <= 3 ? '#FFFFFF' : '#6B7280';
 };
@@ -66,8 +62,10 @@ export const SchoolDetailScreen: React.FC = () => {
   const [members, setMembers] = useState<SchoolUserRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  
+  // 2. Add Search State
+  const [searchQuery, setSearchQuery] = useState(''); 
 
-  // Convert seconds to "Xh Ym"
   const formatSeconds = (sec: number | null | undefined) => {
     const total = Math.max(0, Math.floor(sec ?? 0));
     const h = Math.floor(total / 3600);
@@ -80,7 +78,6 @@ export const SchoolDetailScreen: React.FC = () => {
   const loadMembers = useCallback(
     async (options?: { asRefresh?: boolean }) => {
       const isRefresh = options?.asRefresh;
-
       if (isRefresh) setRefreshing(true);
       else setLoading(true);
 
@@ -97,7 +94,6 @@ export const SchoolDetailScreen: React.FC = () => {
         }
 
         const rows = (data ?? []) as SchoolUserRow[];
-
         setMembers(
           rows.map((row) => ({
             ...row,
@@ -118,16 +114,23 @@ export const SchoolDetailScreen: React.FC = () => {
     void loadMembers();
   }, [loadMembers]);
 
+  // 3. Filter Logic (Filters instantly as you type)
+  const filteredMembers = members.filter((member) => {
+    const displayName = (member.email ?? '').split('@')[0] || '';
+    const query = searchQuery.toLowerCase();
+    return displayName.toLowerCase().includes(query);
+  });
+
   const handleRefresh = () => {
     void loadMembers({ asRefresh: true });
   };
 
   const handlePressChat = (target: SchoolUserRow) => {
+    // ... (Keep existing chat logic)
     if (!target.allow_chat) {
       Alert.alert('無法聊天', '對方尚未開啟聊天功能。');
       return;
     }
-
     if (!user) {
       Alert.alert('請先登入', '登入後才可以聊天');
       return;
@@ -136,9 +139,7 @@ export const SchoolDetailScreen: React.FC = () => {
       Alert.alert('提醒', '不能跟自己聊天啦 😆');
       return;
     }
-
     const name = (target.email ?? '').split('@')[0] || 'User';
-
     navigation.navigate('Chat', {
       targetUserId: target.user_id,
       targetUserName: name,
@@ -153,12 +154,10 @@ export const SchoolDetailScreen: React.FC = () => {
 
     return (
       <View style={[styles.card, isMe && styles.myCard]}>
-        {/* Left: Rank Badge */}
         <View style={[styles.rankContainer, { backgroundColor: rankBgColor }]}>
           <Text style={[styles.rankText, { color: rankTextColor }]}>{item.rank}</Text>
         </View>
 
-        {/* Center: User Info */}
         <View style={styles.infoContainer}>
           <View style={styles.nameRow}>
             <Text style={styles.name} numberOfLines={1}>
@@ -170,17 +169,15 @@ export const SchoolDetailScreen: React.FC = () => {
               </View>
             )}
           </View>
-
           <View style={styles.statsRow}>
             <Text style={styles.timeText}>{formatSeconds(item.total_seconds)}</Text>
           </View>
         </View>
 
-        {/* Right: Action Buttons or Status */}
         <View style={styles.actionContainer}>
           {isMe ? (
             <View style={styles.meStatusBadge}>
-              <Text style={styles.meStatusText}>Me</Text>
+              <Text style={styles.meStatusText}>NOT CHAT</Text>
             </View>
           ) : item.allow_chat ? (
             <TouchableOpacity
@@ -210,8 +207,21 @@ export const SchoolDetailScreen: React.FC = () => {
           <Text style={styles.subtitle}>校內專注排行榜</Text>
         </View>
 
+        {/* 4. Add Search Bar UI */}
+        <View style={styles.searchContainer}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="搜尋學生名稱..."
+            placeholderTextColor="#9CA3AF"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            clearButtonMode="while-editing" // Adds 'x' button on iOS
+          />
+        </View>
+
         <FlatList
-          data={members}
+          data={filteredMembers} // <--- 5. Use filtered data
           keyExtractor={(item) => item.user_id}
           renderItem={renderItem}
           contentContainerStyle={styles.listContent}
@@ -224,7 +234,11 @@ export const SchoolDetailScreen: React.FC = () => {
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyText}>
-                {loading ? '載入中...' : '目前沒有成員資料'}
+                {loading 
+                  ? '載入中...' 
+                  : searchQuery.length > 0 
+                    ? '找不到符合的學生' 
+                    : '目前沒有成員資料'}
               </Text>
             </View>
           }
@@ -255,13 +269,36 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     fontWeight: '500',
   },
+  
+  // 6. Add Search Bar Styles
+  searchContainer: {
+    paddingHorizontal: SPACING.lg,
+    paddingBottom: 10,
+  },
+  searchInput: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    fontSize: 15,
+    color: '#1F2937',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    // Subtle shadow
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
 
   listContent: {
     paddingHorizontal: SPACING.lg,
     paddingBottom: 20,
     paddingTop: 8,
   },
-
+  
+  // ... (Keep existing card styles below exactly as they were) ...
   card: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -281,7 +318,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#EFF6FF',
     borderColor: '#BFDBFE',
   },
-
   rankContainer: {
     width: 36,
     height: 36,
@@ -294,7 +330,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
-
   infoContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -331,17 +366,14 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
   },
-
   actionContainer: {
     minWidth: 70,
     alignItems: 'flex-end',
     justifyContent: 'center',
   },
-  
-  // Update: Sky blue color for Chat button
   chatButton: {
     flexDirection: 'row',
-    backgroundColor: '#0EA5E9', // Sky Blue 500
+    backgroundColor: '#0EA5E9',
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 20,
@@ -357,10 +389,8 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 12,
   },
-
-  // New: Badge style for "Me"
   meStatusBadge: {
-    backgroundColor: '#E5E7EB', // Gray 200
+    backgroundColor: '#E5E7EB',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 12,
@@ -369,10 +399,9 @@ const styles = StyleSheet.create({
   },
   meStatusText: {
     fontSize: 12,
-    color: '#4B5563', // Gray 600
+    color: '#4B5563',
     fontWeight: '700',
   },
-
   disabledBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -387,7 +416,6 @@ const styles = StyleSheet.create({
     marginLeft: 2,
     fontWeight: '500',
   },
-
   emptyContainer: {
     alignItems: 'center',
     marginTop: 40,
