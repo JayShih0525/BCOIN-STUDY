@@ -175,7 +175,7 @@ public class ChatServer {
             System.out.println("User disconnected: " + userId);
             broadcastUserStatus(userId, false);
 
-            System.err.println("目前在線人目：" + onlineClients.size());
+            System.err.println("目前在線人數：" + onlineClients.size());
         }
 
         socketToUserId.remove(handler.getSocket());
@@ -193,7 +193,7 @@ public class ChatServer {
         broadcastUserStatus(userId, true);
 
         // System.out.println("LOGIN: " + userId);
-        System.err.println("目前在線人目：" + onlineClients.size());
+        System.err.println("目前在線人數：" + onlineClients.size());
     }
 
     // ================================
@@ -215,7 +215,7 @@ public class ChatServer {
         handler.sendJson(resp);
 
         broadcastUserStatus(userId, true);
-        System.err.println("目前在線人目：" + onlineClients.size());
+        System.err.println("目前在線人數：" + onlineClients.size());
     }
 
     // ==========================================
