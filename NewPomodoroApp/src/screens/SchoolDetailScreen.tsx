@@ -22,6 +22,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 // 1. Import Ionicons
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useUnread } from '../context/UnreadContext';     // 用來拿未讀數字
+import { useChatConnectOnFocus } from '../utils/chatClient';
 
 type SchoolDetailRouteProp = RouteProp<RootStackParamList, 'SchoolDetail'>;
 type SchoolDetailNavProp = NativeStackNavigationProp<
@@ -57,6 +58,7 @@ export const SchoolDetailScreen: React.FC = () => {
   const navigation = useNavigation<SchoolDetailNavProp>();
   const { user, signOut } = useAuth();
   const { coins } = useCoinsContext();
+  useChatConnectOnFocus(user?.id);
 
   const { schoolCode, schoolName } = route.params;
 

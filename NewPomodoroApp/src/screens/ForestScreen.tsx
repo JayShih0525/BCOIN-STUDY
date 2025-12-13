@@ -21,15 +21,16 @@ import { COLORS, FONT_SIZES, FONT_WEIGHTS, SPACING } from '../constants/theme';
 import { TimeRecord } from '../types/timeRecord';
 import { useAuth } from '../context/AuthContext';
 import { useUnread } from '../context/UnreadContext';     // 用來拿未讀數字
+import { useChatConnectOnFocus } from '../utils/chatClient';
 
 type ForestScreenRouteProp = RouteProp<RootTabParamList, 'Forest'>;
 
 export const ForestScreen: React.FC = () => {
   const route = useRoute<ForestScreenRouteProp>();
-  const navigation = useNavigation();
   const isFocused = useIsFocused();
   const { signOut, user } = useAuth();
   const { unread } = useUnread();
+  useChatConnectOnFocus(user?.id);
 
   const {
     minutes,

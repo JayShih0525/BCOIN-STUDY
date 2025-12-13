@@ -16,7 +16,6 @@ import {
   Alert,
 } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
-// ✅ 改回使用 ScreenContainer，恢復原本的佈局邏輯
 import { ScreenContainer, TopBar } from '../components';
 import { useAuth } from '../context/AuthContext';
 import { useCoinsContext } from '../context/CoinsContext';
@@ -34,13 +33,10 @@ import {
   checkUserOnline,
 } from '../utils/chatClient';
 
-// --- 新功能套件 ---
 import { launchImageLibrary } from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
 import { supabase } from '../lib/supabase';
 import { getAvatarUrl } from '../utils/avatar';
-
-// ✅ Polyfill
 import { decode } from 'base-64';
 
 type ChatRouteProp = RouteProp<RootStackParamList, 'Chat'>;
@@ -54,6 +50,7 @@ type ChatMessage = {
   fromMe: boolean;
   isPending?: boolean;
   type?: 'TEXT' | 'IMAGE' | 'TRANSFER';
+  isServer?: boolean;
 };
 
 // --- 日期 Helper ---
@@ -103,7 +100,6 @@ export const ChatScreen: React.FC = () => {
 
   const { user, signOut } = useAuth();
   const { coins, refresh } = useCoinsContext();
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { setActiveRoomId, clearRoomUnread, unread } = useUnread();
 
   // --- State ---
@@ -141,18 +137,13 @@ export const ChatScreen: React.FC = () => {
   };
 
   // ------------------------------------------------------
-  // 核心 Effect
+  // Context & Room Logic
   // ------------------------------------------------------
-
   useEffect(() => {
     if (roomId) {
-      // 1. 進入頁面：告訴 Context 我在這個房間 (擋住震動)
       setActiveRoomId(roomId);
-      // 2. 順便清除這個房間原本的紅點
       clearRoomUnread(roomId);
     }
-
-    // 3. 離開頁面 (Unmount)：清除活躍狀態
     return () => {
       setActiveRoomId(null);
     };
@@ -192,16 +183,21 @@ export const ChatScreen: React.FC = () => {
 
       if (msg.type === 'HISTORY' && msg.roomId === roomId) {
         const rawList = msg.data || [];
-        const mapped: ChatMessage[] = rawList.map((row: any) => ({
-          id: row.messageId,
-          roomId: row.roomId,
-          senderId: row.senderId,
-          content: row.content,
-          createdAt: row.createdAt,
-          fromMe: row.senderId === user.id,
-          isPending: false,
-          type: detectType(row.content),
-        }));
+        const mapped: ChatMessage[] = rawList.map((row: any) => {
+          const msgType = detectType(row.content);
+          return {
+            id: row.messageId,
+            roomId: row.roomId,
+            senderId: row.senderId,
+            content: row.content,
+            createdAt: row.createdAt,
+            fromMe: row.senderId === user.id,
+            isPending: false,
+            type: msgType,
+            // 讀取 DB 的 isServer 狀態
+            isServer: row.isServer, 
+          };
+        });
 
         if (rawList.length < 50) setHasMore(false);
 
@@ -212,12 +208,7 @@ export const ChatScreen: React.FC = () => {
           setMessages(mapped);
           setIsLoading(false);
           if (mapped.length > 0) {
-            chatClient.sendJson({ 
-              type: 'MARK_READ', 
-              roomId, 
-              userId: user.id, 
-              lastReadMessageId: mapped[0].id 
-            });
+            chatClient.sendJson({ type: 'MARK_READ', roomId, userId: user.id, lastReadMessageId: mapped[0].id });
           }
         }
       }
@@ -245,6 +236,7 @@ export const ChatScreen: React.FC = () => {
               fromMe: true,
               isPending: false,
               type: msgType,
+              isServer: msg.isServer,
             };
             return newArr;
           }
@@ -260,51 +252,34 @@ export const ChatScreen: React.FC = () => {
             fromMe,
             isPending: false,
             type: msgType,
+            isServer: msg.isServer,
           };
           return [newMsg, ...prev];
         });
 
         if (!fromMe) {
-          chatClient.sendJson({ 
-            type: 'MARK_READ', 
-            roomId, 
-            userId: user.id, 
-            lastReadMessageId: msg.messageId 
-          });
+          chatClient.sendJson({ type: 'MARK_READ', roomId, userId: user.id, lastReadMessageId: msg.messageId });
           setUnreadNewMsgCount(c => c + 1);
         }
       }
 
-      if (msg.type === 'USER_STATUS' && msg.userId === targetUserId) {
-        setIsTargetOnline(msg.isOnline);
-      }
-      if (msg.type === 'USER_STATUS_CHANGE' && msg.userId === targetUserId) {
-        setIsTargetOnline(msg.isOnline);
-      }
+      if (msg.type === 'USER_STATUS' && msg.userId === targetUserId) setIsTargetOnline(msg.isOnline);
+      if (msg.type === 'USER_STATUS_CHANGE' && msg.userId === targetUserId) setIsTargetOnline(msg.isOnline);
     };
 
     addChatListener(listener);
-    return () => {
-      removeChatListener(listener);
-    };
+    return () => { removeChatListener(listener); };
   }, [user?.id, roomId, targetUserId]);
 
   useEffect(() => {
-    if (!showScrollBottom) {
-      setUnreadNewMsgCount(0);
-    }
+    if (!showScrollBottom) setUnreadNewMsgCount(0);
   }, [showScrollBottom]);
 
   // ------------------------------------------------------
-  // 功能 1: 圖片上傳
+  // Actions
   // ------------------------------------------------------
   const handlePickImage = async () => {
-    const result = await launchImageLibrary({
-      mediaType: 'photo',
-      quality: 0.7,
-      selectionLimit: 1,
-    });
-
+    const result = await launchImageLibrary({ mediaType: 'photo', quality: 0.7, selectionLimit: 1 });
     if (result.assets && result.assets.length > 0) {
       const asset = result.assets[0];
       if (!asset.uri) return;
@@ -312,61 +287,30 @@ export const ChatScreen: React.FC = () => {
     }
   };
 
-  // ------------------------------------------------------
-  // 功能 1: 圖片上傳 (修正版)
-  // ------------------------------------------------------
   const uploadImage = async (uri: string, mimeType: string) => {
     if (!user) return;
     setIsUploading(true);
-
     try {
-      // 1. 讀取檔案為 base64
       const base64 = await RNFS.readFile(uri, 'base64');
-
-      // 2. 將 Base64 轉換為 ArrayBuffer (這是 React Native 上傳圖片的正確姿勢)
       const binaryString = decode(base64);
       const len = binaryString.length;
       const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
+      for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
       const arrayBuffer = bytes.buffer;
-
       const fileName = `${user.id}/${Date.now()}.jpg`;
 
-      // 3. 上傳 ArrayBuffer
-      const { error } = await supabase.storage
-        .from('chat-images')
-        .upload(fileName, arrayBuffer, {
-          contentType: mimeType,
-          upsert: false,
-        });
-
+      const { error } = await supabase.storage.from('chat-images').upload(fileName, arrayBuffer, { contentType: mimeType, upsert: false });
       if (error) throw error;
-
-      // 4. 取得公開 URL
-      const { data: publicData } = supabase.storage
-        .from('chat-images')
-        .getPublicUrl(fileName);
-      
+      const { data: publicData } = supabase.storage.from('chat-images').getPublicUrl(fileName);
       handleSend(publicData.publicUrl, 'IMAGE');
-
     } catch (err: any) {
       console.error('Upload failed', err);
-      // 如果是權限錯誤，提示使用者
-      if (err.message && err.message.includes('row-level security')) {
-         Alert.alert('上傳失敗', '請檢查 Supabase Storage 的權限設定 (RLS Policy)。');
-      } else {
-         Alert.alert('上傳失敗', '無法上傳圖片，請稍後再試。');
-      }
+      Alert.alert('上傳失敗', '無法上傳圖片，請稍後再試。');
     } finally {
       setIsUploading(false);
     }
   };
 
-  // ------------------------------------------------------
-  // 功能 2: 轉帳 (RPC)
-  // ------------------------------------------------------
   const handleTransfer = async () => {
     const val = parseInt(transferAmount);
     if (isNaN(val) || val <= 0) {
@@ -389,7 +333,10 @@ export const ChatScreen: React.FC = () => {
       if (error) throw error;
 
       const msg = `💸 Sent ${val} coins`;
-      handleSend(msg, 'TRANSFER');
+      
+      // ★ 這裡修改：轉帳訊息設為 isServer = true
+      // 我們會在 renderItem 裡特殊處理：雖然它是 server 訊息，但如果是 TRANSFER，就靠邊站
+      handleSend(msg, 'TRANSFER', true);
       
       if (refresh) refresh();
       setShowTransferModal(false);
@@ -404,10 +351,7 @@ export const ChatScreen: React.FC = () => {
     }
   };
 
-  // ------------------------------------------------------
-  // 統一發送
-  // ------------------------------------------------------
-  const handleSend = (content: string, type: 'TEXT' | 'IMAGE' | 'TRANSFER' = 'TEXT') => {
+  const handleSend = (content: string, type: 'TEXT' | 'IMAGE' | 'TRANSFER' = 'TEXT', isServer: boolean = false) => {
     if (!user || !roomId || !content.trim()) return;
 
     const tempId = Date.now().toString();
@@ -421,19 +365,13 @@ export const ChatScreen: React.FC = () => {
       fromMe: true,
       isPending: true,
       type,
+      isServer: isServer, 
     };
 
     setMessages((prev) => [pendingMsg, ...prev]);
     if (type === 'TEXT') setInputText('');
 
-    sendChatMessage({
-      type: 'SEND_MESSAGE',
-      roomId,
-      senderId: user.id,
-      content: content.trim(),
-      tempId,
-    });
-
+    sendChatMessage({ type: 'SEND_MESSAGE', roomId, senderId: user.id, content: content.trim(), tempId, isServer });
     flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
   };
 
@@ -442,70 +380,87 @@ export const ChatScreen: React.FC = () => {
   // ------------------------------------------------------
   const handleScroll = (event: any) => {
     const offsetY = event.nativeEvent.contentOffset.y;
-    if (offsetY > 300) {
-      setShowScrollBottom(true);
-    } else {
-      setShowScrollBottom(false);
-      setUnreadNewMsgCount(0);
-    }
+    setShowScrollBottom(offsetY > 300);
+    if (offsetY <= 300) setUnreadNewMsgCount(0);
   };
-
-  const scrollToBottom = () => {
-    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-    setShowScrollBottom(false);
-    setUnreadNewMsgCount(0);
-  };
-
-  const handleLoadMore = () => {
-    if (isLoading || isFetchingMore || !hasMore || messages.length === 0) return;
-    setIsFetchingMore(true);
-    const oldestMsg = messages[messages.length - 1];
-    getChatHistory(roomId, user!.id, oldestMsg.createdAt);
-  };
-
+  const scrollToBottom = () => { flatListRef.current?.scrollToOffset({ offset: 0, animated: true }); setShowScrollBottom(false); setUnreadNewMsgCount(0); };
+  const handleLoadMore = () => { if (isLoading || isFetchingMore || !hasMore || messages.length === 0) return; setIsFetchingMore(true); const oldestMsg = messages[messages.length - 1]; getChatHistory(roomId, user!.id, oldestMsg.createdAt); };
   const handleGoBack = () => navigation.goBack();
+  const isTransferText = (content: string) => {
+    return content.includes('💸 Sent') && content.includes('coins');
+  };
 
+  const isImageUrl = (content: string) => {
+    return content.includes('chat-images'); // 你原本的規則
+  };
+
+  // ------------------------------------------------------
+  // Render Item (核心邏輯)
+  // ------------------------------------------------------
   const renderItem = ({ item, index }: { item: ChatMessage; index: number }) => {
     const nextItem = messages[index + 1];
     const showDateHeader = !nextItem || !isSameDay(item.createdAt, nextItem.createdAt);
-    
-    const isImage = item.type === 'IMAGE';
-    const isTransfer = item.type === 'TRANSFER';
 
+    // --- 依你的規則做三分類 ---
+    const isTransfer = !!item.isServer && isTransferText(item.content); // ③
+    const isSystem = !!item.isServer && !isTransfer;                   // ②
+    const isNormal = !item.isServer;                                   // ①
+
+    const isImage = isImageUrl(item.content) || item.type === 'IMAGE';
+
+    // ② isServer 且不是 💸 Sent ➔ 系統訊息 (置中灰色)
+    if (isSystem) {
+      return (
+        <View style={styles.itemContainer}>
+          {showDateHeader && <DateHeader dateLabel={getDateLabel(item.createdAt)} />}
+          <View style={styles.systemMessageContainer}>
+            <Text style={styles.systemMessageText}>{item.content}</Text>
+          </View>
+        </View>
+      );
+    }
+
+    // ① 非 isServer ➔ 正常顯示 (左右氣泡)
+    // ③ isServer 且是 💸 Sent ➔ 轉帳訊息 (左右氣泡，金色樣式)
     return (
       <View style={styles.itemContainer}>
-        {showDateHeader && (
-          <DateHeader dateLabel={getDateLabel(item.createdAt)} />
-        )}
+        {showDateHeader && <DateHeader dateLabel={getDateLabel(item.createdAt)} />}
 
         <View style={[styles.messageBubbleWrapper, item.fromMe ? styles.meWrapper : styles.otherWrapper]}>
           <View
             style={[
               styles.messageBubble,
-              item.fromMe ? styles.meBubble : styles.otherBubble,
+              isTransfer
+                ? styles.transferBubble
+                : (item.fromMe ? styles.meBubble : styles.otherBubble),
+
               { opacity: item.isPending ? 0.6 : 1 },
-              isImage && { padding: 0, backgroundColor: 'transparent', borderWidth: 0 }
+
+              isImage && { padding: 0, backgroundColor: 'transparent', borderWidth: 0 },
             ]}
           >
             {isImage ? (
-              <Image 
-                source={{ uri: item.content }} 
-                style={styles.chatImage} 
-                resizeMode="cover"
-              />
+              <Image source={{ uri: item.content }} style={styles.chatImage} resizeMode="cover" />
             ) : (
               <Text
                 style={[
                   styles.messageText,
-                  item.fromMe ? styles.meText : styles.otherText,
-                  isTransfer && { color: '#F59E0B', fontWeight: 'bold' }
+                  isTransfer
+                    ? styles.transferText
+                    : (item.fromMe ? styles.meText : styles.otherText),
                 ]}
               >
                 {item.content}
               </Text>
             )}
-            
-            <Text style={[styles.timestamp, item.fromMe ? styles.meTimestamp : styles.otherTimestamp]}>
+
+            <Text
+              style={[
+                styles.timestamp,
+                item.fromMe ? styles.meTimestamp : styles.otherTimestamp,
+                isTransfer && { color: 'rgba(180, 83, 9, 0.7)' },
+              ]}
+            >
               {formatTime(item.createdAt)}
             </Text>
           </View>
@@ -514,41 +469,19 @@ export const ChatScreen: React.FC = () => {
     );
   };
 
-  // ------------------------------------------------------
-  // Render
-  // ------------------------------------------------------
   return (
-    // ✅ 改回 ScreenContainer，這是你原本的排版邏輯
     <ScreenContainer>
-      <TopBar 
-        coins={coins} 
-        onSettingsPress={signOut}
-        unreadCount={unread.total}
-      />
+      <TopBar coins={coins} onSettingsPress={signOut} unreadCount={unread.total} />
 
-      {/* Header */}
       <View style={styles.chatHeader}>
         <TouchableOpacity onPress={handleGoBack} style={styles.backButton}>
           <Ionicons name="chevron-back" size={24} color={COLORS.black} />
         </TouchableOpacity>
         <View style={styles.headerInfo}>
           <View style={styles.avatarContainer}>
-            <Image
-              // 使用工具函式，傳入對方的 ID 作為種子
-              source={{ uri: getAvatarUrl(targetUserId) }}
-              style={styles.avatarImage}
-              resizeMode="cover"
-            />
-            {/* 在線狀態小綠點保持不變 */}
+            <Image source={{ uri: getAvatarUrl(targetUserId) }} style={styles.avatarImage} resizeMode="cover" />
             {isTargetOnline && <View style={styles.onlineBadge} />}
           </View>
-
-          {/* <View style={styles.avatarPlaceholder}>
-            <Text style={styles.avatarText}>{targetUserName.charAt(0).toUpperCase()}</Text>
-            {isTargetOnline && <View style={styles.onlineBadge} />}
-          </View> */}
-
-
           <View>
             <Text style={styles.headerTitle}>{targetUserName}</Text>
             <Text style={[styles.headerStatus, { color: isTargetOnline ? '#10B981' : '#9CA3AF' }]}>
@@ -558,373 +491,120 @@ export const ChatScreen: React.FC = () => {
         </View>
       </View>
 
-      <KeyboardAvoidingView
-        style={styles.keyboardContainer}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+      <KeyboardAvoidingView style={styles.keyboardContainer} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         {isLoading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={COLORS.primary} />
-            <Text style={styles.loadingText}>載入中...</Text>
-          </View>
+          <View style={styles.loadingContainer}><ActivityIndicator size="large" color={COLORS.primary} /><Text style={styles.loadingText}>載入中...</Text></View>
         ) : (
           <View style={styles.listContainer}>
             <FlatList
-              ref={flatListRef}
-              data={messages}
-              keyExtractor={(item) => item.id}
-              inverted
-              contentContainerStyle={styles.messageListContent}
-              onScroll={handleScroll}
-              scrollEventThrottle={100}
-              onEndReached={handleLoadMore}
-              onEndReachedThreshold={0.2}
-              renderItem={renderItem}
-              
-              ListFooterComponent={
-                isFetchingMore ? (
-                  <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-                    <ActivityIndicator size="small" color={COLORS.gray} />
-                  </View>
-                ) : null
-              }
-              ListEmptyComponent={
-                <View style={[styles.emptyContainer, { transform: [{ scaleY: -1 }] }]}>
-                  <Ionicons name="chatbubbles-outline" size={48} color="#D1D5DB" />
-                  <Text style={styles.emptyText}>開始與 {targetUserName} 聊天吧</Text>
-                </View>
-              }
+              ref={flatListRef} data={messages} keyExtractor={(item) => item.id} inverted
+              contentContainerStyle={styles.messageListContent} onScroll={handleScroll} scrollEventThrottle={100}
+              onEndReached={handleLoadMore} onEndReachedThreshold={0.2} renderItem={renderItem}
+              ListFooterComponent={isFetchingMore ? (<View style={{ paddingVertical: 20, alignItems: 'center' }}><ActivityIndicator size="small" color={COLORS.gray} /></View>) : null}
+              ListEmptyComponent={<View style={[styles.emptyContainer, { transform: [{ scaleY: -1 }] }]}><Ionicons name="chatbubbles-outline" size={48} color="#D1D5DB" /><Text style={styles.emptyText}>開始與 {targetUserName} 聊天吧</Text></View>}
             />
-
             {showScrollBottom && (
-              <TouchableOpacity
-                style={styles.scrollToBottomButton}
-                onPress={scrollToBottom}
-                activeOpacity={0.8}
-              >
-                {unreadNewMsgCount > 0 && (
-                  <View style={styles.badge}>
-                    <Text style={styles.badgeText}>{unreadNewMsgCount}</Text>
-                  </View>
-                )}
+              <TouchableOpacity style={styles.scrollToBottomButton} onPress={scrollToBottom} activeOpacity={0.8}>
+                {unreadNewMsgCount > 0 && <View style={styles.badge}><Text style={styles.badgeText}>{unreadNewMsgCount}</Text></View>}
                 <Ionicons name="arrow-down" size={20} color="#FFF" />
-                {unreadNewMsgCount > 0 && (
-                  <Text style={styles.newMsgText}>新訊息</Text>
-                )}
               </TouchableOpacity>
             )}
           </View>
         )}
 
-        {/* Input Bar */}
         <View style={styles.inputContainer}>
-          {/* 照片按鈕 */}
           <TouchableOpacity onPress={handlePickImage} style={styles.actionButton} disabled={isUploading}>
              {isUploading ? <ActivityIndicator size="small" color="#666"/> : <Ionicons name="image-outline" size={24} color="#666" />}
           </TouchableOpacity>
-
-          {/* 轉帳按鈕 */}
           <TouchableOpacity onPress={() => setShowTransferModal(true)} style={styles.actionButton}>
              <Ionicons name="cash-outline" size={24} color="#F59E0B" />
           </TouchableOpacity>
-
-          <TextInput
-            style={styles.input}
-            value={inputText}
-            onChangeText={setInputText}
-            placeholder="輸入訊息..."
-            placeholderTextColor="#9CA3AF"
-            multiline
-            maxLength={500}
-          />
-          <TouchableOpacity
-            style={[styles.sendButton, !inputText.trim() && styles.sendButtonDisabled]}
-            onPress={() => handleSend(inputText, 'TEXT')}
-            disabled={!inputText.trim()}
-          >
+          <TextInput style={styles.input} value={inputText} onChangeText={setInputText} placeholder="輸入訊息..." placeholderTextColor="#9CA3AF" multiline maxLength={500} />
+          <TouchableOpacity style={[styles.sendButton, !inputText.trim() && styles.sendButtonDisabled]} onPress={() => handleSend(inputText, 'TEXT')} disabled={!inputText.trim()}>
             <Ionicons name="send" size={20} color="#FFF" style={{ marginLeft: 2 }} />
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
 
-      {/* 轉帳 Modal */}
       <Modal visible={showTransferModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>發送金幣</Text>
             <Text style={styles.modalSubtitle}>給: {targetUserName}</Text>
             <Text style={styles.balanceText}>目前餘額: {coins}</Text>
-            
-            <TextInput 
-              style={styles.modalInput}
-              keyboardType="number-pad"
-              placeholder="輸入金額"
-              value={transferAmount}
-              onChangeText={setTransferAmount}
-            />
-
+            <TextInput style={styles.modalInput} keyboardType="number-pad" placeholder="輸入金額" value={transferAmount} onChangeText={setTransferAmount} />
             <View style={styles.modalButtons}>
-              <TouchableOpacity style={styles.modalCancel} onPress={() => setShowTransferModal(false)}>
-                <Text style={{color: '#666'}}>取消</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.modalConfirm} onPress={handleTransfer} disabled={isTransferring}>
-                {isTransferring ? <ActivityIndicator color="#FFF" /> : <Text style={{color: '#FFF', fontWeight:'bold'}}>發送</Text>}
-              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalCancel} onPress={() => setShowTransferModal(false)}><Text style={{color: '#666'}}>取消</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.modalConfirm} onPress={handleTransfer} disabled={isTransferring}>{isTransferring ? <ActivityIndicator color="#FFF" /> : <Text style={{color: '#FFF', fontWeight:'bold'}}>發送</Text>}</TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
-
     </ScreenContainer>
   );
 };
 
 const styles = StyleSheet.create({
-  // 移除 safeArea class，因為 ScreenContainer 已經處理了
-  keyboardContainer: {
-    flex: 1,
-    backgroundColor: '#F9FAFB',
-  },
-  listContainer: {
-    flex: 1,
-    position: 'relative',
-  },
-  chatHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: SPACING.md,
-    paddingVertical: 12,
-    backgroundColor: '#FFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
-  },
+  keyboardContainer: { flex: 1, backgroundColor: '#F9FAFB' },
+  listContainer: { flex: 1, position: 'relative' },
+  chatHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: SPACING.md, paddingVertical: 12, backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
   backButton: { padding: 4, marginRight: 8 },
   headerInfo: { flexDirection: 'row', alignItems: 'center' },
-  avatarPlaceholder: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#E0E7FF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
-    position: 'relative',
-  },
-  avatarText: { fontSize: 16, fontWeight: 'bold', color: '#4F46E5' },
-  onlineBadge: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#10B981',
-    borderWidth: 2,
-    borderColor: '#FFF',
-  },
-  avatarContainer: {
-    width: 40,
-    height: 40,
-    marginRight: 10,
-    position: 'relative', // 為了讓小綠點絕對定位
-  },
-  avatarImage: {
-    width: 40,
-    height: 40,
-    borderRadius: 20, // 圓形
-    backgroundColor: '#F3F4F6', // 圖片載入前的底色
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
   headerTitle: { fontSize: FONT_SIZES.md, fontWeight: FONT_WEIGHTS.bold, color: '#1F2937' },
   headerStatus: { fontSize: 12, fontWeight: '500' },
-
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  avatarContainer: { width: 40, height: 40, marginRight: 10, position: 'relative' },
+  avatarImage: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: '#E5E7EB' },
+  onlineBadge: { position: 'absolute', bottom: 0, right: 0, width: 12, height: 12, borderRadius: 6, backgroundColor: '#10B981', borderWidth: 2, borderColor: '#FFF' },
+  messageListContent: { paddingHorizontal: SPACING.md, paddingVertical: SPACING.md },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 10, color: COLORS.gray },
-
-  messageListContent: {
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.md,
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 50,
-    opacity: 0.7,
-    flex: 1,
-  },
+  emptyContainer: { alignItems: 'center', justifyContent: 'center', marginTop: 50, opacity: 0.7, flex: 1 },
   emptyText: { marginTop: 8, color: '#9CA3AF', fontSize: 14 },
+  itemContainer: { width: '100%' },
+  dateHeaderContainer: { alignItems: 'center', marginVertical: 12 },
+  dateHeaderBadge: { backgroundColor: '#E5E7EB', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
+  dateHeaderText: { fontSize: 12, color: '#6B7280', fontWeight: '500' },
 
-  itemContainer: {
-    width: '100%',
-  },
-  dateHeaderContainer: {
-    alignItems: 'center',
-    marginVertical: 12,
-  },
-  dateHeaderBadge: {
-    backgroundColor: '#E5E7EB',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  dateHeaderText: {
-    fontSize: 12,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
+  // ★ 系統訊息 (置中)
+  systemMessageContainer: { alignItems: 'center', marginVertical: 8, paddingHorizontal: 20, width: '100%' },
+  systemMessageText: { fontSize: 12, color: '#9CA3AF', backgroundColor: '#F3F4F6', paddingVertical: 4, paddingHorizontal: 12, borderRadius: 12, overflow: 'hidden', textAlign: 'center' },
 
+  // ★ 對話氣泡
   messageBubbleWrapper: { marginVertical: 4, width: '100%' },
   meWrapper: { alignItems: 'flex-end' },
   otherWrapper: { alignItems: 'flex-start' },
-  messageBubble: {
-    maxWidth: '75%',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
-  },
+  
+  messageBubble: { maxWidth: '75%', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
   meBubble: { backgroundColor: COLORS.secondary, borderBottomRightRadius: 4 },
   otherBubble: { backgroundColor: '#FFFFFF', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#E5E7EB' },
-  
+
+  // ★ 轉帳特殊氣泡 (就算它是 server 訊息，因為是 transfer，所以用這個氣泡)
+  transferBubble: { backgroundColor: '#FEF3C7', borderColor: '#FCD34D', borderWidth: 1 },
+  transferText: { color: '#B45309', fontWeight: 'bold' },
+
   messageText: { fontSize: 15, lineHeight: 22 },
   meText: { color: '#000000' },
   otherText: { color: '#000000' },
-  
-  chatImage: {
-    width: 200,
-    height: 200,
-    borderRadius: 10,
-    backgroundColor: '#eee',
-  },
-
+  chatImage: { width: 200, height: 200, borderRadius: 10, backgroundColor: '#eee' },
   timestamp: { fontSize: 10, marginTop: 4, alignSelf: 'flex-end' },
   meTimestamp: { color: '#9CA3AF' },
   otherTimestamp: { color: '#9CA3AF' },
 
-  // Input Area Styles - 這裡稍微調整排版，讓新按鈕不破壞佈局
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: SPACING.md,
-    paddingVertical: 12,
-    backgroundColor: '#FFFFFF',
-    borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
-  },
-  actionButton: {
-    padding: 8,
-    marginRight: 4,
-    justifyContent: 'center',
-    height: 44, // 增加高度以方便點擊
-    marginBottom: 0, // 對齊 input
-  },
-  input: {
-    flex: 1,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: '#1F2937',
-    maxHeight: 100,
-    marginRight: 10,
-  },
-  sendButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.secondary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: COLORS.secondary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 3,
-  },
+  inputContainer: { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: SPACING.md, paddingVertical: 12, backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#F3F4F6' },
+  actionButton: { padding: 8, marginRight: 4, justifyContent: 'center', height: 44, marginBottom: 0 },
+  input: { flex: 1, backgroundColor: '#F3F4F6', borderRadius: 24, paddingHorizontal: 16, paddingVertical: 10, fontSize: 15, color: '#1F2937', maxHeight: 100, marginRight: 10 },
+  sendButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: COLORS.secondary, justifyContent: 'center', alignItems: 'center', shadowColor: COLORS.secondary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 3 },
   sendButtonDisabled: { backgroundColor: '#D1D5DB', shadowOpacity: 0, elevation: 0 },
-
-  scrollToBottomButton: {
-    position: 'absolute',
-    bottom: 20,
-    right: 20,
-    backgroundColor: COLORS.primary,
-    borderRadius: 25,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  newMsgText: { color: '#FFF', fontWeight: 'bold', marginLeft: 6, fontSize: 12 },
-  badge: {
-    position: 'absolute',
-    top: -8,
-    right: -5,
-    backgroundColor: 'red',
-    borderRadius: 10,
-    minWidth: 20,
-    height: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
-  },
+  scrollToBottomButton: { position: 'absolute', bottom: 20, right: 20, backgroundColor: COLORS.primary, borderRadius: 25, paddingVertical: 10, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 5 },
+  badge: { position: 'absolute', top: -8, right: -5, backgroundColor: 'red', borderRadius: 10, minWidth: 20, height: 20, justifyContent: 'center', alignItems: 'center', zIndex: 10 },
   badgeText: { color: '#FFF', fontSize: 10, fontWeight: 'bold', paddingHorizontal: 4 },
-
-  // Modal Styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    width: '80%',
-    backgroundColor: '#FFF',
-    borderRadius: 12,
-    padding: 20,
-    elevation: 5,
-  },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  modalContent: { width: '80%', backgroundColor: '#FFF', borderRadius: 12, padding: 20, elevation: 5 },
   modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 8, textAlign: 'center' },
   modalSubtitle: { textAlign: 'center', color: '#666', marginBottom: 4 },
   balanceText: { textAlign: 'center', color: COLORS.primary, marginBottom: 16, fontWeight: '600' },
-  modalInput: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 10,
-    fontSize: 16,
-    marginBottom: 20,
-    textAlign: 'center',
-  },
+  modalInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 10, fontSize: 16, marginBottom: 20, textAlign: 'center' },
   modalButtons: { flexDirection: 'row', justifyContent: 'space-between' },
-  modalCancel: {
-    flex: 1,
-    padding: 12,
-    alignItems: 'center',
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
-    marginRight: 8,
-  },
-  modalConfirm: {
-    flex: 1,
-    padding: 12,
-    alignItems: 'center',
-    backgroundColor: COLORS.primary,
-    borderRadius: 8,
-    marginLeft: 8,
-  },
+  modalCancel: { flex: 1, padding: 12, alignItems: 'center', backgroundColor: '#f0f0f0', borderRadius: 8, marginRight: 8 },
+  modalConfirm: { flex: 1, padding: 12, alignItems: 'center', backgroundColor: COLORS.primary, borderRadius: 8, marginLeft: 8 },
 });

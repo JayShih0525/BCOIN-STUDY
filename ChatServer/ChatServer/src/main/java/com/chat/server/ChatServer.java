@@ -17,7 +17,7 @@ public class ChatServer {
     // ================================
     // Chat server config
     // ================================
-    private static final int PORT = 12345;
+    private static final int PORT = 9090;
 
     // Supabase REST API settings
     private static final String SUPABASE_URL = "https://jbcfmrpycmoffahbhfnr.supabase.co";
@@ -266,9 +266,10 @@ public class ChatServer {
         String senderId = json.get("senderId").getAsString();
         String content = json.get("content").getAsString();
         String tempId = json.has("tempId") ? json.get("tempId").getAsString() : null;
+        boolean isServer = json.has("isServer") ? json.get("isServer").getAsBoolean() : false;
 
         // 1. 先存入資料庫 (這部分保持不變)
-        MessageRecord msg = saveMessage(roomId, senderId, content);
+        MessageRecord msg = saveMessage(roomId, senderId, content, isServer);
 
         if (msg == null) {
             System.out.println("saveMessage failed");
@@ -280,6 +281,7 @@ public class ChatServer {
         out.addProperty("type", "MESSAGE");
         out.addProperty("roomId", roomId);
         out.addProperty("messageId", msg.id); // 正式的 UUID
+        out.addProperty("isServer", isServer);
         out.addProperty("senderId", senderId);
         out.addProperty("content", content);
         out.addProperty("createdAt", msg.createdAt.toString());
@@ -415,11 +417,19 @@ public class ChatServer {
             for (int i = 0; i < arr.size(); i++) {
                 JsonObject row = arr.get(i).getAsJsonObject();
                 JsonObject msg = new JsonObject();
+                boolean isServer = false;
+                if (row.has("is_server") && !row.get("is_server").isJsonNull()) {
+                    isServer = row.get("is_server").getAsBoolean();
+                } else if (row.has("isServer") && !row.get("isServer").isJsonNull()) {
+                    // 兼容你之前可能存錯欄位名
+                    isServer = row.get("isServer").getAsBoolean();
+                }
                 msg.addProperty("messageId", row.get("id").getAsString());
                 msg.addProperty("roomId", row.get("room_id").getAsString());
                 msg.addProperty("senderId", row.get("sender_id").getAsString());
                 msg.addProperty("content", row.get("content").getAsString());
                 msg.addProperty("createdAt", row.get("created_at").getAsString());
+                msg.addProperty("isServer", isServer);
                 list.add(msg);
             }
         } catch (Exception e) {
@@ -437,7 +447,7 @@ public class ChatServer {
     }
 
     // Save message into Supabase
-    private MessageRecord saveMessage(String roomId, String senderId, String content) {
+    private MessageRecord saveMessage(String roomId, String senderId, String content, boolean isServer) {
         try {
             URL url = new URL(SUPABASE_URL + "/rest/v1/chat_messages");
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -457,6 +467,7 @@ public class ChatServer {
             payload.addProperty("room_id", roomId);
             payload.addProperty("sender_id", senderId);
             payload.addProperty("content", content);
+            payload.addProperty("isServer", isServer);
             
             String body = gson.toJson(payload);
 
@@ -517,9 +528,8 @@ public class ChatServer {
         List<String> list = new ArrayList<>();
 
         try {
-            URL url = new URL(
-                SUPABASE_URL + "/rest/v1/chat_room_members?room_id=eq." + roomId
-            );
+            String encodedRoomId = URLEncoder.encode(roomId, "UTF-8");
+            URL url = new URL(SUPABASE_URL + "/rest/v1/chat_room_members?room_id=eq." + encodedRoomId);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 
             conn.setRequestMethod("GET");

@@ -24,6 +24,7 @@ import { ShopItem } from '../constants/shop';
 import { COLORS, FONT_SIZES, FONT_WEIGHTS, SPACING } from '../constants/theme';
 import { supabase } from '../lib/supabase';
 import { useUnread } from '../context/UnreadContext';     // 用來拿未讀數字
+import { useChatConnectOnFocus } from '../utils/chatClient';
 
 type ShopNavProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -34,6 +35,8 @@ const CARD_WIDTH = (width - SPACING.lg * 2 - GAP) / 2;
 
 export const ShopScreen: React.FC = () => {
   const { user, signOut } = useAuth();
+  useChatConnectOnFocus(user?.id);
+  
   const {
     coins,
     removeCoins,

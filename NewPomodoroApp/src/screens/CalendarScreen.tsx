@@ -4,10 +4,10 @@
  */
 
 import React, { useState } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
-import { ScreenContainer, TopBar } from '../components';
+import { ScreenContainer } from '../components';
 import {
     CalendarHeader,
     CalendarPicker,
@@ -18,10 +18,15 @@ import { useTimeRecordsContext } from '../context';
 import { TimeRecord, TimeRecordFormData } from '../types/timeRecord';
 import { RootTabParamList } from '../types/navigation';
 import { COLORS } from '../constants/theme';
+import { useChatConnectOnFocus } from '../utils/chatClient';
+import { useAuth } from '../context/AuthContext';
 
 type CalendarScreenNavigationProp = BottomTabNavigationProp<RootTabParamList, 'Calendar'>;
 
 export const CalendarScreen: React.FC = () => {
+    const { user } = useAuth();
+    useChatConnectOnFocus(user?.id);
+
     const navigation = useNavigation<CalendarScreenNavigationProp>();
     const {
         selectedDate,
@@ -43,10 +48,6 @@ export const CalendarScreen: React.FC = () => {
         setSheetVisible(true);
     };
 
-    // const handlePressRecord = (record: TimeRecord) => {
-    //     // 導航到番茄鐘頁面，帶入此任務
-    //     navigation.navigate('Forest', { activeTask: record });
-    // };
     const handlePressRecord = (record: TimeRecord) => {
         navigation.navigate('Forest', {
             activeTask: {

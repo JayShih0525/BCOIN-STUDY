@@ -19,7 +19,7 @@ import { useCoinsContext } from '../context/CoinsContext';
 import { COLORS, FONT_SIZES, FONT_WEIGHTS, SPACING } from '../constants/theme';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
-
+import { useChatConnectOnFocus } from '../utils/chatClient';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types/navigation';
@@ -64,6 +64,7 @@ export const GuildScreen: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const { unread } = useUnread();
+  useChatConnectOnFocus(user?.id);
 
   // 2. Add Search State
   const [searchQuery, setSearchQuery] = useState('');
