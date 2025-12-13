@@ -3,8 +3,8 @@ import TcpSocket from 'react-native-tcp-socket';
 
 // const HOST = 'Jays-MacBook-Pro-10.local';
 // const PORT = 12345;
-const HOST = 'http://nch000001.duckdns.org/';
-const PORT = 8080;
+const HOST = '61.224.32.83';
+const PORT = 9090;
 
 // Singleton socket
 let socket: TcpSocket.Socket | null = null;

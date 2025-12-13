@@ -38,6 +38,7 @@ import {
 import { launchImageLibrary } from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
 import { supabase } from '../lib/supabase';
+import { getAvatarUrl } from '../utils/avatar';
 
 // ✅ Polyfill
 import { decode } from 'base-64';
@@ -531,10 +532,23 @@ export const ChatScreen: React.FC = () => {
           <Ionicons name="chevron-back" size={24} color={COLORS.black} />
         </TouchableOpacity>
         <View style={styles.headerInfo}>
-          <View style={styles.avatarPlaceholder}>
-            <Text style={styles.avatarText}>{targetUserName.charAt(0).toUpperCase()}</Text>
+          <View style={styles.avatarContainer}>
+            <Image
+              // 使用工具函式，傳入對方的 ID 作為種子
+              source={{ uri: getAvatarUrl(targetUserId) }}
+              style={styles.avatarImage}
+              resizeMode="cover"
+            />
+            {/* 在線狀態小綠點保持不變 */}
             {isTargetOnline && <View style={styles.onlineBadge} />}
           </View>
+
+          {/* <View style={styles.avatarPlaceholder}>
+            <Text style={styles.avatarText}>{targetUserName.charAt(0).toUpperCase()}</Text>
+            {isTargetOnline && <View style={styles.onlineBadge} />}
+          </View> */}
+
+
           <View>
             <Text style={styles.headerTitle}>{targetUserName}</Text>
             <Text style={[styles.headerStatus, { color: isTargetOnline ? '#10B981' : '#9CA3AF' }]}>
@@ -707,6 +721,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#10B981',
     borderWidth: 2,
     borderColor: '#FFF',
+  },
+  avatarContainer: {
+    width: 40,
+    height: 40,
+    marginRight: 10,
+    position: 'relative', // 為了讓小綠點絕對定位
+  },
+  avatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20, // 圓形
+    backgroundColor: '#F3F4F6', // 圖片載入前的底色
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   headerTitle: { fontSize: FONT_SIZES.md, fontWeight: FONT_WEIGHTS.bold, color: '#1F2937' },
   headerStatus: { fontSize: 12, fontWeight: '500' },
