@@ -72,6 +72,7 @@ export const ChatListScreen: React.FC = () => {
   // 輔助 Ref
   const didInitialLoadRef = useRef(false);
   const isFetchingRef = useRef(false);
+  const isImageUrl = (content: string) => content.includes('https://jbcfmrpycmoffahbhfnr.supabase.co/storage/v1/object/public/chat-images/');
 
   // ------------------------------
   // Helpers
@@ -290,6 +291,25 @@ export const ChatListScreen: React.FC = () => {
         ? null
         : (item.avatarUrl || fallbackAvatar(item.targetUserId || 'unknown'));
 
+    // ★ 修正點 1: 處理最後一條訊息的顯示內容
+    const displayLastMessage = () => {
+        if (!item.lastMessage) {
+            return '尚無訊息';
+        }
+
+        if (isImageUrl(item.lastMessage)) {
+            // 由於在 ChatList 頁面中，我們無法輕易確定發送者是誰，
+            // 對於 1v1 聊天，我們使用對方的名字；對於群組，我們只顯示 [相片]。
+            if (item.isGroup) {
+                return '[相片]';
+            } else {
+                return `${item.name || '用戶'} 傳送了相片`;
+            }
+        }
+        
+        return item.lastMessage.trim();
+    };
+
     return (
       <TouchableOpacity style={styles.roomItem} onPress={() => openRoom(item)} activeOpacity={0.75}>
         {/* 頭像區域 */}
@@ -310,7 +330,6 @@ export const ChatListScreen: React.FC = () => {
           )}
         </View>
 
-        {/* 文字區域 */}
         <View style={styles.contentContainer}>
           <View style={styles.rowTop}>
             <Text style={styles.roomName} numberOfLines={1}>
@@ -319,8 +338,9 @@ export const ChatListScreen: React.FC = () => {
             <Text style={styles.timeText}>{timeStr}</Text>
           </View>
 
+          {/* ★ 修正點 2: 使用新的 displayLastMessage 函數 */}
           <Text style={styles.lastMsg} numberOfLines={1}>
-            {item.lastMessage?.trim() ? item.lastMessage : '尚無訊息'}
+            {displayLastMessage()}
           </Text>
         </View>
       </TouchableOpacity>

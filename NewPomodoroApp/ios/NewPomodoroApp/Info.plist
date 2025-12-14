@@ -66,7 +66,9 @@
 	</array>
 	<key>UIAppFonts</key>
 	<array>
-	<string>Ionicons.ttf</string>
+		<string>Ionicons.ttf</string>
 	</array>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>需要儲存圖片到相簿</string>
 </dict>
 </plist>

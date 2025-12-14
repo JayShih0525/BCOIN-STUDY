@@ -1,6 +1,4 @@
-// src/screens/ChatScreen.tsx
-
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -14,9 +12,18 @@ import {
   Modal,
   Image,
   Alert,
+  Dimensions, 
+  Animated, 
+  PanResponder,
 } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+
+// ★ 引入 Clipboard 和下載所需的模組
+import Clipboard from '@react-native-community/clipboard'; 
+import { check, request, PERMISSIONS, RESULTS } from 'react-native-permissions';
+import { CameraRoll } from '@react-native-camera-roll/camera-roll';
+import RNFS from 'react-native-fs'; 
 
 import { ScreenContainer, TopBar } from '../components';
 import { useAuth } from '../context/AuthContext';
@@ -35,14 +42,15 @@ import {
 } from '../utils/chatClient';
 
 import { launchImageLibrary } from 'react-native-image-picker';
-import RNFS from 'react-native-fs';
 import { supabase } from '../lib/supabase';
 import { getAvatarUrl } from '../utils/avatar';
 import { decode } from 'base-64';
 
+// 獲取螢幕尺寸
+const { width, height } = Dimensions.get('window');
+
 type RootStackParamList = {
   Chat: {
-    // ✅ 你可以從 ChatList 傳 roomId；或只傳 targetUserId 讓 ChatScreen 自己 ensure
     roomId?: string;
     targetUserId: string;
     targetUserName: string;
@@ -62,6 +70,56 @@ type ChatMessage = {
   isPending?: boolean;
   type?: 'TEXT' | 'IMAGE' | 'TRANSFER';
   isServer?: boolean;
+};
+
+// --- Helper Functions for Image Download & Permissions ---
+
+const getSavePermission = async (): Promise<boolean> => {
+  const permission = Platform.select({
+    ios: PERMISSIONS.IOS.PHOTO_LIBRARY_ADD_ONLY,
+    android: Platform.Version >= 33
+      ? PERMISSIONS.ANDROID.READ_MEDIA_IMAGES
+      : PERMISSIONS.ANDROID.WRITE_EXTERNAL_STORAGE,
+    default: undefined,
+  });
+
+  if (!permission) return false;
+
+  let result = await check(permission);
+  if (result !== RESULTS.GRANTED) {
+    result = await request(permission);
+  }
+  return result === RESULTS.GRANTED;
+};
+
+const saveImageToGallery = async (url: string) => {
+  try {
+    const hasPermission = await getSavePermission();
+    if (!hasPermission) {
+      Alert.alert('權限不足', '請授予應用程式儲存照片到相簿的權限。');
+      return;
+    }
+
+    const cleanUrl = url.split('?')[0];
+    let filename = cleanUrl.substring(cleanUrl.lastIndexOf('/') + 1);
+    if (!filename.includes('.')) filename = `${filename}.jpg`;
+    const localPath = `${RNFS.CachesDirectoryPath}/${filename}`;
+
+    const res = await RNFS.downloadFile({ fromUrl: url, toFile: localPath }).promise;
+    if (res.statusCode !== 200) {
+      throw new Error(`Download failed with status code ${res.statusCode}`);
+    }
+
+    const fileUri = Platform.OS === 'ios' ? `file://${localPath}` : localPath;
+
+    await CameraRoll.save(fileUri, { type: 'photo' });
+
+    Alert.alert('下載成功', '圖片已保存到您的相簿。');
+    await RNFS.unlink(localPath);
+  } catch (e: any) {
+    console.error('Image save error:', e);
+    Alert.alert('下載失敗', e.message || '無法保存圖片，請檢查權限或重試。');
+  }
 };
 
 // --- 日期 Helper ---
@@ -114,8 +172,12 @@ export const ChatScreen: React.FC = () => {
 
   // --- State ---
   const [roomId, setRoomId] = useState<string>(routeRoomId || '');
-  const [roomReady, setRoomReady] = useState<boolean>(!!routeRoomId || isGroup); // group 也可以直接用 routeRoomId
+  const [roomReady, setRoomReady] = useState<boolean>(!!routeRoomId || isGroup);
   const [targetAvatarUrl, setTargetAvatarUrl] = useState<string | null>(null);
+  
+  // 名字 State (用來從 DB 覆蓋路由參數)
+  const [displayName, setDisplayName] = useState(targetUserName); 
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
@@ -131,11 +193,63 @@ export const ChatScreen: React.FC = () => {
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferAmount, setTransferAmount] = useState('');
   const [isTransferring, setIsTransferring] = useState(false);
+  
+  // 圖片預覽 State
+  const [imageModalVisible, setImageModalVisible] = useState(false);
+  const [currentImageUrl, setCurrentImageUrl] = useState('');
+  // ★ 修正點 1: 新增圖片載入狀態
+  const [isImageLoading, setIsImageLoading] = useState(true); 
 
   // --- Refs ---
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
   const historyFetchedRef = useRef(false);
   const currentRoomIdRef = useRef<string>('');
+  
+  // PanResponder 狀態
+  const pan = useRef(new Animated.ValueXY()).current; 
+
+  // ★ PanResponder Hook
+  const panResponder = useMemo(() => {
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        // 只有向下垂直拖曳超過 5 像素才啟用 PanResponder
+        return Math.abs(gestureState.dy) > Math.abs(gestureState.dx) && gestureState.dy > 5;
+      },
+      
+      onPanResponderMove: Animated.event(
+        [
+          null, 
+          { dy: pan.y } 
+        ],
+        { useNativeDriver: false } 
+      ),
+      
+      onPanResponderRelease: (evt, gestureState) => {
+        const isClosing = gestureState.dy > 100 || gestureState.vy > 0.5;
+
+        if (isClosing) {
+          Animated.timing(pan, {
+              toValue: { x: 0, y: height }, 
+              duration: 200,
+              useNativeDriver: true,
+          }).start(() => {
+              // ★ 修正點 3: 刪除 pan.setValue({ x: 0, y: 0 });
+              // 我們使用點擊關閉按鈕/handleCloseImageModal 來安全地重置 pan
+              setImageModalVisible(false);
+          });
+        } else {
+          // 拖曳不足夠，回彈到原始位置 (0, 0)
+          Animated.spring(pan, {
+            toValue: { x: 0, y: 0 },
+            useNativeDriver: true, 
+            bounciness: 5,
+          }).start();
+        }
+      },
+    });
+  }, [pan, setImageModalVisible]);
+
 
   const formatTime = (iso: string) => {
     const d = new Date(iso);
@@ -143,61 +257,55 @@ export const ChatScreen: React.FC = () => {
   };
 
   // ------------------------------------------------------
-  // ✅ 1) 進頁面先確保 roomId（只對 1v1）
+  // ✅ 1) 進頁面先確保 roomId（只對 1v1）+ 載入頭像和名稱
   // ------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      if (!user || !targetUserId) return;
+      if (!user?.id || !targetUserId) return;
 
-      // 1. 異步：獲取目標用戶頭像
+      // 1. 異步：獲取目標用戶頭像和名稱
       try {
         const { data, error } = await supabase
           .from('user_profiles')
-          .select('avatar_url')
+          .select('avatar_url, display_name') 
           .eq('user_id', targetUserId)
-          .single();
-        
-        if (!cancelled && data && data.avatar_url) {
-          setTargetAvatarUrl(data.avatar_url);
-        } else if (!cancelled) {
-          // 如果 DB 沒有頭像，使用回退邏輯 (DiceBear/隨機頭像)
-          setTargetAvatarUrl(getAvatarUrl(targetUserId));
-        }
+          .maybeSingle();
 
-        if (error && error.code !== 'PGRST116') { // 忽略單筆查詢找不到的錯誤
-          console.error('Failed to fetch avatar:', error);
-        }
-      } catch (e) {
-        console.error('Avatar fetch exception:', e);
-        if (!cancelled) {
-          // 發生異常，使用回退邏輯
+        if (cancelled) return;
+
+        if (!error && data) {
+          if (data.avatar_url) setTargetAvatarUrl(data.avatar_url);
+          else setTargetAvatarUrl(getAvatarUrl(targetUserId));
+          
+          if (data.display_name) setDisplayName(data.display_name);
+        } else {
           setTargetAvatarUrl(getAvatarUrl(targetUserId));
         }
+      } catch {
+        if (!cancelled) setTargetAvatarUrl(getAvatarUrl(targetUserId));
       }
-
 
       // 2. 處理房間邏輯
       if (isGroup || routeRoomId) {
-        if (!cancelled && !roomId) {
-          setRoomId(routeRoomId!);
-          setRoomReady(true);
-        }
+        if (cancelled) return;
+        if (routeRoomId) setRoomId(routeRoomId);
+        setRoomReady(true);
         return;
       }
 
-      // 1對1：確保房間存在
+      if (roomReady && roomId) return;
+
+      // 確保 1v1 room
       try {
-        console.log('[ChatScreen] ensure_one_to_one_room...');
         const { data, error } = await supabase.rpc('ensure_one_to_one_room', {
           p_user1_id: user.id,
           p_user2_id: targetUserId,
         });
 
         if (error) throw error;
-
-        const ensuredRoomId = typeof data === 'string' ? data : String(data);
+        const ensuredRoomId = String(data);
 
         if (!cancelled) {
           setRoomId(ensuredRoomId);
@@ -212,7 +320,7 @@ export const ChatScreen: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [user?.id, targetUserId, isGroup, routeRoomId, roomId]); // 這裡的 roomId 是必要的依賴項，確保邏輯的順序性
+  }, [user?.id, targetUserId, isGroup, routeRoomId]); 
 
   // ------------------------------------------------------
   // ✅ 2) Room Context (未讀)
@@ -258,7 +366,6 @@ export const ChatScreen: React.FC = () => {
     connectChatServer(user.id).then((connected) => {
       if (!connected || removed) return;
 
-      // 第一次進來抓 history
       if (!historyFetchedRef.current) {
         getChatHistory(roomId, user.id);
         checkUserOnline(targetUserId);
@@ -290,10 +397,8 @@ export const ChatScreen: React.FC = () => {
           isServer: row.isServer,
         }));
 
-        // 小於 50 視為到底了（依你 server 回傳策略調）
         if (rawList.length < 50) setHasMore(false);
 
-        // requestBefore 表示是 “載入更舊”
         if (msg.requestBefore) {
           setMessages((prev) => [...prev, ...mapped]);
           setIsFetchingMore(false);
@@ -301,7 +406,6 @@ export const ChatScreen: React.FC = () => {
           setMessages(mapped);
           setIsLoading(false);
 
-          // 初次載入後：mark read（最上面那筆是最新，因為你 inverted + [new,...prev]）
           if (mapped.length > 0) {
             chatClient.sendJson({
               type: 'MARK_READ',
@@ -319,11 +423,9 @@ export const ChatScreen: React.FC = () => {
         const msgType = detectType(msg.content);
 
         setMessages((prev) => {
-          // 找 pending 替換（tempId）
           let pendingIndex = -1;
           if (msg.tempId) pendingIndex = prev.findIndex((m) => m.id === msg.tempId);
 
-          // fallback: fromMe 且內容相同（避免 server 沒回 tempId）
           if (pendingIndex === -1 && fromMe) {
             pendingIndex = prev.findIndex((m) => m.isPending && m.content === msg.content);
           }
@@ -341,7 +443,6 @@ export const ChatScreen: React.FC = () => {
             return next;
           }
 
-          // 去重
           if (prev.some((m) => m.id === msg.messageId)) return prev;
 
           const newMsg: ChatMessage = {
@@ -359,7 +460,6 @@ export const ChatScreen: React.FC = () => {
           return [newMsg, ...prev];
         });
 
-        // 非自己訊息：自動 mark read + badge
         if (!fromMe) {
           chatClient.sendJson({
             type: 'MARK_READ',
@@ -390,6 +490,33 @@ export const ChatScreen: React.FC = () => {
   // ------------------------------------------------------
   // Actions
   // ------------------------------------------------------
+  
+  // 圖片預覽和下載處理
+  const handleImagePress = (url: string) => {
+    setCurrentImageUrl(url);
+    pan.setValue({ x: 0, y: 0 });
+    // ★ 修正點 4: 重置載入狀態
+    setIsImageLoading(true); 
+    setImageModalVisible(true);
+  };
+
+  const handleCloseImageModal = useCallback(() => {
+    // 確保 pan 重置 (這裡的重置不會觸發重啟感，因為 Modal 隨即被移除)
+    pan.setValue({ x: 0, y: 0 }); 
+    setImageModalVisible(false); 
+  }, [pan, setImageModalVisible]);
+  
+  const handleImageLongPress = (url: string) => {
+    Alert.alert(
+      '下載圖片',
+      '您確定要將此圖片保存到相簿嗎？',
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '下載', onPress: () => saveImageToGallery(url) },
+      ]
+    );
+  };
+  
   const handlePickImage = async () => {
     const result = await launchImageLibrary({
       mediaType: 'photo',
@@ -453,13 +580,12 @@ export const ChatScreen: React.FC = () => {
       if (error) throw error;
 
       const msg = `💸 Sent ${val} coins`;
-      // 轉帳訊息：你原本用 isServer=true 但要顯示在氣泡上
       handleSend(msg, 'TRANSFER', true);
 
       if (refresh) refresh();
       setShowTransferModal(false);
       setTransferAmount('');
-      Alert.alert('轉帳成功', `已發送 ${val} 金幣給 ${targetUserName}`);
+      Alert.alert('轉帳成功', `已發送 ${val} 金幣給 ${displayName}`);
     } catch (err: any) {
       console.error(err);
       Alert.alert('交易失敗', err?.message || '發生錯誤，請稍後再試');
@@ -534,7 +660,6 @@ export const ChatScreen: React.FC = () => {
     const nextItem = messages[index + 1];
     const showDateHeader = !nextItem || !isSameDay(item.createdAt, nextItem.createdAt);
 
-    // 三分類（照你原本規則）
     const isTransfer = !!item.isServer && isTransferText(item.content);
     const isSystem = !!item.isServer && !isTransfer;
     const isImage = isImageUrl(item.content) || item.type === 'IMAGE';
@@ -557,6 +682,16 @@ export const ChatScreen: React.FC = () => {
         {showDateHeader && <DateHeader dateLabel={getDateLabel(item.createdAt)} />}
 
         <View style={[styles.messageBubbleWrapper, item.fromMe ? styles.meWrapper : styles.otherWrapper]}>
+          <TouchableOpacity 
+            activeOpacity={0.8}
+            // 文本長按複製
+            onLongPress={() => {
+              if (!isImage && !isTransfer && !isSystem) {
+                Clipboard.setString(item.content);
+                Alert.alert('已複製', '訊息內容已複製到剪貼簿。');
+              }
+            }}
+          > 
           <View
             style={[
               styles.messageBubble,
@@ -566,7 +701,14 @@ export const ChatScreen: React.FC = () => {
             ]}
           >
             {isImage ? (
-              <Image source={{ uri: item.content }} style={styles.chatImage} resizeMode="cover" />
+              // 圖片點擊放大，長按下載
+              <TouchableOpacity 
+                onPress={() => handleImagePress(item.content)} 
+                onLongPress={() => handleImageLongPress(item.content)}
+                activeOpacity={0.9}
+              >
+                <Image source={{ uri: item.content }} style={styles.chatImage} resizeMode="cover" />
+              </TouchableOpacity>
             ) : (
               <Text
                 style={[
@@ -588,6 +730,7 @@ export const ChatScreen: React.FC = () => {
               {formatTime(item.createdAt)}
             </Text>
           </View>
+          </TouchableOpacity>
         </View>
       </View>
     );
@@ -607,12 +750,18 @@ export const ChatScreen: React.FC = () => {
 
         <View style={styles.headerInfo}>
           <View style={styles.avatarContainer}>
-            <Image source={{ uri: getAvatarUrl(targetUserId) }} style={styles.avatarImage} resizeMode="cover" />
+            {/* 使用 targetAvatarUrl 獲取真實頭像，否則使用 fallback */}
+            <Image 
+              source={{ uri: targetAvatarUrl || getAvatarUrl(targetUserId) }} 
+              style={styles.avatarImage} 
+              resizeMode="cover" 
+            />
             {isTargetOnline && <View style={styles.onlineBadge} />}
           </View>
 
           <View>
-            <Text style={styles.headerTitle}>{targetUserName}</Text>
+            {/* 使用 displayName State 顯示名稱 */}
+            <Text style={styles.headerTitle}>{displayName}</Text> 
             <Text style={[styles.headerStatus, { color: isTargetOnline ? '#10B981' : '#9CA3AF' }]}>
               {isTargetOnline ? '在線' : '離線'}
             </Text>
@@ -719,7 +868,8 @@ export const ChatScreen: React.FC = () => {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>發送金幣</Text>
-            <Text style={styles.modalSubtitle}>給: {targetUserName}</Text>
+            {/* 使用 displayName State */}
+            <Text style={styles.modalSubtitle}>給: {displayName}</Text> 
             <Text style={styles.balanceText}>目前餘額: {coins}</Text>
 
             <TextInput
@@ -749,6 +899,89 @@ export const ChatScreen: React.FC = () => {
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* ★★★ 圖片預覽 Modal (實現拖曳關閉動畫) ★★★ */}
+      <Modal 
+          visible={imageModalVisible} 
+          transparent={true} 
+          animationType="none"
+          // ★ 修正點 1: 處理 Android/硬體返回鍵
+          onRequestClose={handleCloseImageModal}
+          // ★ 修正點 2: 解決頁面重啟感問題。當 Modal 隱藏後才重置 pan。
+          onDismiss={() => {
+              // 在 Modal 卸載完成後，如果 pan 還有殘留值，強制重置，但這通常由 handleCloseImageModal 處理
+              // 我們主要依賴 PanResponder 的邏輯
+          }}
+      >
+        
+        {/* Modal 背景 (實現透明度插值) */}
+        <Animated.View style={[
+            styles.modalBackground,
+            {
+                opacity: pan.y.interpolate({
+                    inputRange: [0, height * 0.8], 
+                    outputRange: [1, 0],           
+                    extrapolate: 'clamp',          
+                })
+            }
+        ]} />
+
+        {/* Modal 內容容器 (綁定 PanResponder 和 Y 軸位移) */}
+        <Animated.View 
+            style={[
+                styles.imageModalContentContainer, 
+                { transform: pan.getTranslateTransform() } 
+            ]}
+            {...panResponder.panHandlers}
+        >
+          
+          {/* 圖片載入器：在圖片載入時顯示 */}
+          {isImageLoading && (
+              <View style={styles.imageLoader}>
+                  <ActivityIndicator size="large" color="#FFF" />
+                  <Text style={styles.imageLoaderText}>圖片載入中...</Text>
+              </View>
+          )}
+
+          {/* 圖片本身 (實現縮放插值) */}
+          <Animated.Image 
+            source={{ uri: currentImageUrl }} 
+            style={[
+                styles.fullScreenImage,
+                { 
+                    opacity: isImageLoading ? 0 : 1, // 載入完成才顯示圖片
+                    transform: [{
+                        scale: pan.y.interpolate({
+                            inputRange: [0, height * 0.8], 
+                            outputRange: [1, 0.9], // 向下滑動時縮小到 90%
+                            extrapolate: 'clamp',
+                        })
+                    }]
+                }
+            ]}
+            resizeMode="contain" 
+            // 綁定載入事件，解決卡頓問題
+            onLoadStart={() => setIsImageLoading(true)}
+            onLoadEnd={() => setIsImageLoading(false)}
+          />
+          
+          {/* 關閉按鈕 */}
+          <TouchableOpacity 
+              style={styles.imageModalCloseButton} 
+              onPress={handleCloseImageModal} // ★ 修正點 4: 使用統一的關閉函數
+          >
+              <Ionicons name="close-circle" size={40} color="#FFF" />
+          </TouchableOpacity>
+
+          {/* 下載按鈕 */}
+          <TouchableOpacity 
+            style={styles.imageModalDownloadButton} 
+            onPress={() => handleImageLongPress(currentImageUrl)}
+          >
+            <Ionicons name="cloud-download" size={30} color="#FFF" />
+          </TouchableOpacity>
+        </Animated.View>
       </Modal>
     </ScreenContainer>
   );
@@ -924,4 +1157,58 @@ const styles = StyleSheet.create({
   modalButtons: { flexDirection: 'row', justifyContent: 'space-between' },
   modalCancel: { flex: 1, padding: 12, alignItems: 'center', backgroundColor: '#f0f0f0', borderRadius: 8, marginRight: 8 },
   modalConfirm: { flex: 1, padding: 12, alignItems: 'center', backgroundColor: COLORS.primary, borderRadius: 8, marginLeft: 8 },
+
+  // --- 圖片預覽 Modal 樣式 ---
+  modalBackground: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#000',
+  },
+  imageModalContentContainer: {
+    flex: 1,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: width,
+    height: height,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullScreenImage: {
+    width: width,
+    height: height,
+  },
+  imageModalCloseButton: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 10,
+    padding: 10,
+  },
+  imageModalDownloadButton: {
+    position: 'absolute',
+    bottom: 50,
+    right: 20,
+    zIndex: 10,
+    padding: 10,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 8,
+  },
+  // 新增圖片載入器樣式
+  imageLoader: {
+    position: 'absolute',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: width,
+    height: height,
+    zIndex: 5, 
+  },
+  imageLoaderText: {
+      marginTop: 10,
+      color: '#FFF',
+      fontSize: 14,
+  },
 });
