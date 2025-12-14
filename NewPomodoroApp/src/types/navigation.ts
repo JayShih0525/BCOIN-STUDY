@@ -27,6 +27,7 @@ export type RootStackParamList = {
     isGroup?: boolean;
   };
   ChatList: undefined; // ★ 名稱是 ChatList
+  Settings: undefined;
 };
 
 export type TabScreenName = keyof RootTabParamList;

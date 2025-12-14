@@ -168,7 +168,6 @@ export const GuildScreen: React.FC = () => {
     <ScreenContainer>
       <TopBar 
         coins={coins} 
-        onSettingsPress={signOut}
         unreadCount={unread.total}
       />
 

@@ -19,6 +19,7 @@ import { CoinsProvider } from './src/context/CoinsContext';
 import { SchoolDetailScreen } from './src/screens/SchoolDetailScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
 import { ChatListScreen } from './src/screens/ChatListScreen';
+import { SettingsScreen } from './src/screens/SettingsScreen';
 import { UnreadProvider } from './src/context/UnreadContext';
 import { connectChatServer, disconnectChatServer } from './src/utils/chatClient';
 import type { RootStackParamList } from './src/types/navigation';
@@ -50,6 +51,8 @@ function MainStack() {
       <Stack.Screen name="Chat" component={ChatScreen} />
       {/* 聊天列表頁面 */}
       <Stack.Screen name="ChatList" component={ChatListScreen} />
+      {/* 設定頁面 */}
+      <Stack.Screen name="Settings" component={SettingsScreen} />
     </Stack.Navigator>
   );
 }

@@ -741,7 +741,7 @@ export const ChatScreen: React.FC = () => {
   // ------------------------------------------------------
   return (
     <ScreenContainer>
-      <TopBar coins={coins} onSettingsPress={signOut} unreadCount={unread.total} />
+      <TopBar coins={coins} unreadCount={unread.total} />
 
       <View style={styles.chatHeader}>
         <TouchableOpacity onPress={handleGoBack} style={styles.backButton}>

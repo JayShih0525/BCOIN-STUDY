@@ -201,7 +201,6 @@ export const SchoolDetailScreen: React.FC = () => {
     <ScreenContainer>
       <TopBar 
         coins={coins} 
-        onSettingsPress={signOut}
         unreadCount={unread.total}
       />
 

@@ -205,7 +205,6 @@ export const ForestScreen: React.FC = () => {
     <ScreenContainer>
       <TopBar 
         coins={coins} 
-        onSettingsPress={signOut}
         unreadCount={unread.total}
       />
 

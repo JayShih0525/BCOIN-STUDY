@@ -2,17 +2,17 @@
 
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-// 引入 Ionicons 來顯示好看的聊天圖示 (如果你的專案還沒設定好 icon，可以用 Emoji 暫代)
+// 引入 Ionicons 來顯示好看的聊天圖示
 import Ionicons from 'react-native-vector-icons/Ionicons'; 
 import { COLORS, SPACING, BORDER_RADIUS, FONT_SIZES, FONT_WEIGHTS } from '../constants/theme';
 import { useNavigation } from '@react-navigation/native';
+// 假設您的 RootStackParamList 中已定義 'Settings'
+import { RootStackParamList } from '../types/navigation';
 
 interface TopBarProps {
     coins: number;
     onSettingsPress?: () => void;
-    // ★ 新增：聊天按鈕點擊事件
     onChatPress?: () => void;
-    // ★ 新增：未讀訊息總數
     unreadCount?: number;
 }
 
@@ -22,23 +22,33 @@ export const TopBar: React.FC<TopBarProps> = ({
     onChatPress, 
     unreadCount = 0 
 }) => {
-    // 3. 在組件內部取得 navigation
+    // 取得 navigation object
     const navigation = useNavigation<any>();
 
-    // 4. 定義點擊處理函式
+    // 處理聊天按鈕點擊
     const handleChatPress = () => {
         if (onChatPress) {
-            // 如果外部有傳入自定義行為，就執行外部的
             onChatPress();
         } else {
-            // 如果沒傳，預設跳轉到 ChatList
+            // 預設跳轉到 ChatList
             navigation.navigate('ChatList');
+        }
+    };
+    
+    // ★ 修正點：定義 Settings 點擊處理函式，預設導航到 Settings 頁面
+    const handleSettingsPress = () => {
+        if (onSettingsPress) {
+            // 如果外部有傳入自定義行為，就執行外部的
+            onSettingsPress();
+        } else {
+            // ★ 預設導航到 Settings 頁面
+            navigation.navigate('Settings');
         }
     };
 
     return (
         <View style={styles.topBar}>
-            {/* ★ 左側：聊天按鈕 */}
+            {/* 左側：聊天按鈕 */}
             <TouchableOpacity 
                 style={styles.chatButton} 
                 onPress={handleChatPress}
@@ -46,7 +56,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 {/* 使用 Icon */}
                 <Ionicons name="chatbubbles-outline" size={24} color={COLORS.black} />
                 
-                {/* ★ 未讀訊息紅點 (Badge) */}
+                {/* 未讀訊息紅點 (Badge) */}
                 {unreadCount > 0 && (
                     <View style={styles.badge}>
                         <Text style={styles.badgeText}>
@@ -66,9 +76,11 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </View>
                 <TouchableOpacity
                     style={styles.settingsButton}
-                    onPress={onSettingsPress}
+                    // ★ 綁定修正後的 handleSettingsPress
+                    onPress={handleSettingsPress}
                 >
-                    <Text style={styles.settingsIcon}>🔚</Text>
+                    {/* 使用 Icon (例如：齒輪或人像) */}
+                    <Ionicons name="settings-outline" size={24} color={COLORS.black} />
                 </TouchableOpacity>
             </View>
         </View>
@@ -84,7 +96,7 @@ const styles = StyleSheet.create({
         paddingTop: SPACING.sm,
         paddingBottom: SPACING.sm,
         width: '100%',
-        backgroundColor: 'transparent', // 確保背景透明或符合你的設計
+        backgroundColor: 'transparent',
     },
     // --- 新增樣式 ---
     chatButton: {
@@ -94,8 +106,8 @@ const styles = StyleSheet.create({
         borderRadius: BORDER_RADIUS.sm,
         alignItems: 'center',
         justifyContent: 'center',
-        marginRight: SPACING.sm, // 與中間內容保持一點距離
-        position: 'relative', // 為了讓 Badge 絕對定位
+        marginRight: SPACING.sm,
+        position: 'relative',
     },
     badge: {
         position: 'absolute',
@@ -108,7 +120,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1.5,
-        borderColor: '#FFF', // 讓紅點有點白邊，比較好看
+        borderColor: '#FFF',
         paddingHorizontal: 4,
     },
     badgeText: {

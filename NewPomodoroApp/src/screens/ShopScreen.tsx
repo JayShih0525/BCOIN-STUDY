@@ -180,7 +180,6 @@ export const ShopScreen: React.FC = () => {
     <ScreenContainer>
       <TopBar 
         coins={coins} 
-        onSettingsPress={signOut}
         unreadCount={unread.total}
       />
 
