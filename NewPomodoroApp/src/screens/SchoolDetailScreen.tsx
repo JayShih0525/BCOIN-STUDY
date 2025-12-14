@@ -136,7 +136,7 @@ export const SchoolDetailScreen: React.FC = () => {
       return;
     }
     if (user.id === target.user_id) {
-      Alert.alert('提醒', '不能跟自己聊天啦 😆');
+      // Alert.alert('提醒', '不能跟自己聊天啦 😆');
       return;
     }
     const name = (target.email ?? '').split('@')[0] || 'User';
@@ -175,11 +175,7 @@ export const SchoolDetailScreen: React.FC = () => {
         </View>
 
         <View style={styles.actionContainer}>
-          {isMe ? (
-            <View style={styles.meStatusBadge}>
-              <Text style={styles.meStatusText}>NOT CHAT</Text>
-            </View>
-          ) : item.allow_chat ? (
+          {item.allow_chat ? (
             <TouchableOpacity
               style={styles.chatButton}
               activeOpacity={0.8}
@@ -411,19 +407,6 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontWeight: '700',
     fontSize: 12,
-  },
-  meStatusBadge: {
-    backgroundColor: '#E5E7EB',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-  },
-  meStatusText: {
-    fontSize: 12,
-    color: '#4B5563',
-    fontWeight: '700',
   },
   disabledBadge: {
     flexDirection: 'row',
