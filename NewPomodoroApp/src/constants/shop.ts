@@ -1,30 +1,50 @@
 // src/constants/shop.ts
 
-// 目前先只有濾鏡類型
-export type ShopItemType = 'filter';
+// ✅ 支援 filter + DiceBear avatar 類商品
+export type ShopItemType =
+  | 'filter'
+  | 'eyes'
+  | 'mouth'
+  | 'hair'
+  | 'accessory'
+  | 'background'
+  | 'style'
+  | 'eyebrows'
+  | 'glasses'
+  | 'skinColor'
+  | 'hairColor';
 
-// ⚠️ 注意：這是「前端用的型別」（camelCase）
-// DB 裡是 filter_id / icon_url（snake_case）
+// ⚠️ 這是「前端用的型別」（camelCase）
+// DB 裡是 filter_id / icon_url / avatar_params（snake_case）
 export interface ShopItem {
   id: string;
   name: string;
   price: number;
   type: ShopItemType;
-  filterId?: string;           // 對應 DB 的 filter_id
-  iconUrl?: string | null;     // 對應 DB 的 icon_url（URL）
-  description?: string | null; // 對應 DB 的 description
+
+  // filter 商品用
+  filterId?: string;
+
+  // avatar 商品用（DiceBear query params）
+  avatarParams?: Record<string, any> | null;
+
+  // UI 顯示用
+  iconUrl?: string | null;
+  description?: string | null;
 }
 
 /**
- * 把 Supabase 撈回來的 row 轉成前端用的 ShopItem
- * （這樣前端就不用到處寫 row.filter_id 了）
+ * 把 Supabase row 轉成前端用的 ShopItem
  */
 export const mapRowToShopItem = (row: any): ShopItem => ({
-  id: row.id,
-  name: row.name,
-  price: row.price,
+  id: String(row.id),
+  name: String(row.name),
+  price: Number(row.price ?? 0),
   type: row.type as ShopItemType,
+
   filterId: row.filter_id ?? undefined,
+  avatarParams: row.avatar_params ?? null, // ✅ 關鍵
+
   iconUrl: row.icon_url ?? null,
   description: row.description ?? null,
 });

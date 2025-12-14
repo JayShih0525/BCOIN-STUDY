@@ -1,6 +1,6 @@
 // src/screens/ShopScreen.tsx
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,8 +11,9 @@ import {
   Alert,
   ActivityIndicator,
   Image,
-  RefreshControl,        // ⭐ 新增
+  RefreshControl,
 } from 'react-native';
+
 import { ScreenContainer, TopBar } from '../components';
 import { useAuth } from '../context/AuthContext';
 import { useCoinsContext } from '../context/CoinsContext';
@@ -20,23 +21,71 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types/navigation';
 import { useShopItems } from '../hooks/useShopItems';
-import { ShopItem } from '../constants/shop';
 import { COLORS, FONT_SIZES, FONT_WEIGHTS, SPACING } from '../constants/theme';
 import { supabase } from '../lib/supabase';
-import { useUnread } from '../context/UnreadContext';     // 用來拿未讀數字
+import { useUnread } from '../context/UnreadContext';
 import { useChatConnectOnFocus } from '../utils/chatClient';
+import { getAvatarUrl } from '../utils/avatar';
 
 type ShopNavProp = NativeStackNavigationProp<RootStackParamList>;
+
+// 定義商品類型，用於篩選
+type ItemType = 'filter' | 'mouth' | 'eyes' | 'hair' | 'accessory' | 'eyebrows' | 'glasses' | 'background' | 'style' | 'backgroundType';
+type FilterType = 'all' | ItemType; // 'all' 是預設選項
+
+// ✅ 前端顯示用（camelCase）
+type ShopItem = {
+  id: string;
+  name: string;
+  price: number;
+  type: string; // 'filter' | 'mouth' | 'eyes' | ...
+  iconUrl?: string | null;
+  avatarParams?: Record<string, any> | null; // ⭐ 用來組 DiceBear URL
+  description?: string | null;
+};
 
 // Calculate card width for a 2-column grid based on screen size
 const { width } = Dimensions.get('window');
 const GAP = SPACING.md;
 const CARD_WIDTH = (width - SPACING.lg * 2 - GAP) / 2;
 
+
+// 篩選按鈕元件
+const TypeFilterButton: React.FC<{
+  type: FilterType;
+  selected: boolean;
+  onSelect: (type: FilterType) => void;
+}> = React.memo(({ type, selected, onSelect }) => {
+  const displayText = type === 'all' 
+    ? '全部商品' 
+    : type.charAt(0).toUpperCase() + type.slice(1);
+
+  return (
+    <TouchableOpacity
+      style={[
+        styles.filterButton,
+        selected ? styles.filterButtonSelected : null,
+      ]}
+      onPress={() => onSelect(type)}
+      activeOpacity={0.7}
+    >
+      <Text
+        style={[
+          styles.filterText,
+          selected ? styles.filterTextSelected : null,
+        ]}
+      >
+        {displayText}
+      </Text>
+    </TouchableOpacity>
+  );
+});
+
+
 export const ShopScreen: React.FC = () => {
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   useChatConnectOnFocus(user?.id);
-  
+
   const {
     coins,
     removeCoins,
@@ -45,20 +94,75 @@ export const ShopScreen: React.FC = () => {
   } = useCoinsContext();
 
   const navigation = useNavigation<ShopNavProp>();
-
   const { unread } = useUnread();
 
-  // 1️⃣ 資料庫商品列表（透過 hook）
-  const { items: shopItems, loading: shopLoading } = useShopItems();
+  // ✅ hook 拿到的 raw items（snake_case）
+  const {
+    items: shopItemsRaw,
+    loading: shopLoading,
+    refresh: refreshShopItems,
+  } = useShopItems();
 
-  // 2️⃣ 目前使用者已經買過的 item_id
+  // 1️⃣ 過濾器狀態：預設顯示全部
+  const [selectedType, setSelectedType] = useState<FilterType>('all');
+
+  // 2️⃣ 已購買 item_id
   const [ownedIds, setOwnedIds] = useState<string[]>([]);
   const [loadingOwned, setLoadingOwned] = useState(false);
 
-  // 3️⃣ 下拉刷新狀態
+  // 3️⃣ 下拉刷新
   const [refreshing, setRefreshing] = useState(false);
 
-  // 把「載入已購買清單」抽成一個 function，之後下拉也可以呼叫
+  // ⭐ seed 固定（未登入也不會炸）
+  const seed = user?.id ?? 'guest';
+  
+  // ⭐ 基礎角色外觀參數：用於讓預覽圖差異更明顯
+  const BASE_AVATAR_PARAMS = useMemo(() => ({
+    mouth: 'variant02', // 固定的嘴巴
+    eyes: 'variant11',  // 固定的眼睛
+    hair: 'long',       // 固定的髮型
+  }), []);
+
+
+  // 所有可用的商品類型選項
+  const availableTypes: FilterType[] = useMemo(() => [
+    'all',
+    'filter',
+    'mouth',
+    'eyes',
+    'hair',
+    'accessory',
+    'eyebrows',
+    'glasses',
+    'background',
+    'style',
+    'backgroundType',
+  ], []);
+
+
+  // ✅ 統一 camelCase
+  const displayItems: ShopItem[] = useMemo(() => {
+    return (shopItemsRaw ?? []).map((it: any) => ({
+      id: it.id,
+      name: it.name,
+      price: it.price,
+      type: it.type,
+      iconUrl: it.icon_url ?? null,
+      avatarParams: it.avatar_params ?? null,
+      description: it.description ?? null,
+    }));
+  }, [shopItemsRaw]);
+
+  // 4️⃣ 根據選擇的 type 進行過濾
+  const filteredItems = useMemo(() => {
+    if (selectedType === 'all') {
+      return displayItems;
+    }
+    return displayItems.filter(item => item.type === selectedType);
+  }, [displayItems, selectedType]);
+
+
+  // 讀取已購買清單
   const fetchOwned = useCallback(async () => {
     if (!user) {
       setOwnedIds([]);
@@ -75,39 +179,39 @@ export const ShopScreen: React.FC = () => {
       console.warn('載入已購買商品失敗：', error.message);
       setOwnedIds([]);
     } else {
-      setOwnedIds((data ?? []).map(row => row.item_id));
+      setOwnedIds((data ?? []).map((row: any) => row.item_id));
     }
     setLoadingOwned(false);
   }, [user]);
 
-  // 初次進入畫面時載入已購買清單（只跑一次）
   useEffect(() => {
     void fetchOwned();
   }, [fetchOwned]);
 
-  // 下拉時要做的事：重抓 coins + owned
+  // 下拉刷新：coins + owned + shopItems
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
       await Promise.all([
-        refreshCoins?.(), // 如果 useCoins 有給 refresh
+        refreshCoins?.(),
         fetchOwned(),
+        refreshShopItems?.(),
       ]);
     } finally {
       setRefreshing(false);
     }
-  }, [refreshCoins, fetchOwned]);
+  }, [refreshCoins, fetchOwned, refreshShopItems]);
 
-  // 開啟濾鏡（只有已購買的才能走到這裡）
+  // filter 類型才開啟濾鏡
   const handleUseFilter = (item: ShopItem) => {
-    if (!item.filterId) {
+    if (!item?.id) {
       Alert.alert('無法使用', '這個商品沒有設定 filterId。');
       return;
     }
-    navigation.navigate('FilterCamera', { filterId: item.filterId });
+    navigation.navigate('FilterCamera', { filterId: item.id });
   };
 
-  // 按下「購買」按鈕
+  // 購買
   const handleBuyItem = useCallback(
     async (item: ShopItem) => {
       if (!user) {
@@ -121,10 +225,7 @@ export const ShopScreen: React.FC = () => {
       }
 
       if (coins < item.price) {
-        Alert.alert(
-          'B 幣不足',
-          `這個商品需要 ${item.price} B，目前只有 ${coins} B`
-        );
+        Alert.alert('B 幣不足', `這個商品需要 ${item.price} B，目前只有 ${coins} B`);
         return;
       }
 
@@ -135,21 +236,15 @@ export const ShopScreen: React.FC = () => {
           { text: '取消', style: 'cancel' },
           {
             text: '購買',
-            style: 'default',
             onPress: async () => {
               try {
                 // 先扣本地 B 幣（useCoins 會同步到 DB）
                 removeCoins(item.price);
 
-                // 寫入購買紀錄（避免重複：用 user_id + item_id 當 unique）
+                // 寫入購買紀錄（避免重複：unique(user_id, item_id)）
                 const { error } = await supabase.from('shop_purchases').upsert(
-                  {
-                    user_id: user.id,
-                    item_id: item.id,
-                  },
-                  {
-                    onConflict: 'user_id,item_id',
-                  }
+                  { user_id: user.id, item_id: item.id },
+                  { onConflict: 'user_id,item_id' }
                 );
 
                 if (error) {
@@ -158,9 +253,7 @@ export const ShopScreen: React.FC = () => {
                   return;
                 }
 
-                // 更新本地 ownedIds
-                setOwnedIds(prev => [...prev, item.id]);
-
+                setOwnedIds((prev) => [...prev, item.id]);
                 Alert.alert('購買成功', `已購買「${item.name}」 🎉`);
               } catch (e) {
                 console.warn('handleBuyItem error', e);
@@ -178,52 +271,72 @@ export const ShopScreen: React.FC = () => {
 
   return (
     <ScreenContainer>
-      <TopBar 
-        coins={coins} 
-        unreadCount={unread.total}
-      />
+      <TopBar coins={coins} unreadCount={unread.total} />
 
       <View style={styles.container}>
         <View style={styles.headerContainer}>
           <Text style={styles.headerTitle}>Store</Text>
-          <Text style={styles.headerSubtitle}>
-            購買濾鏡與主題，讓你的專注更有趣！
-          </Text>
+          <Text style={styles.headerSubtitle}>購買濾鏡與頭像配件，讓你的專注更有趣！</Text>
         </View>
+        
+        {/* ⭐ 篩選器容器 (確保高度固定) */}
+        <View style={styles.filterListContainer}>
+          <FlatList
+            data={availableTypes}
+            keyExtractor={(item) => item}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.filterList}
+            contentContainerStyle={styles.filterListContent}
+            renderItem={({ item }) => (
+              <TypeFilterButton
+                type={item}
+                selected={selectedType === item}
+                onSelect={setSelectedType}
+              />
+            )}
+          />
+        </View>
+        {/* ⭐ 篩選器容器結束 */}
 
         {isLoading && !refreshing && (
           <View style={{ alignItems: 'center', marginBottom: SPACING.md }}>
             <ActivityIndicator />
-            <Text style={{ marginTop: 4, fontSize: FONT_SIZES.xs }}>
-              載入中…
-            </Text>
+            <Text style={{ marginTop: 4, fontSize: FONT_SIZES.xs }}>載入中…</Text>
           </View>
         )}
 
         <FlatList
-          data={shopItems}
-          keyExtractor={item => item.id}
+          data={filteredItems} 
+          keyExtractor={(item) => item.id}
           numColumns={2}
           columnWrapperStyle={styles.columnWrapper}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
-          // ⭐ 加上下拉更新
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={handleRefresh}
-            />
-          }
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
           renderItem={({ item }) => {
             const owned = ownedIds.includes(item.id);
 
+            // ⭐ 預覽圖生成邏輯：合併基礎參數
+            const displayImageUrl =
+              item.type === 'filter'
+                ? (item.iconUrl ?? undefined)
+                : getAvatarUrl(
+                    seed,
+                    'adventurer-neutral',
+                    {
+                      ...BASE_AVATAR_PARAMS,
+                      ...(item.avatarParams || {}),
+                    }
+                  );
+            // ⭐ 邏輯結束
+
             return (
               <View style={styles.card}>
-                {/* 圖示：若 DB 有 icon_url 就顯示圖片，沒有就顯示 emoji 或首字母 */}
                 <View style={styles.cardImagePlaceholder}>
-                  {item.iconUrl ? (
+                  {displayImageUrl ? (
                     <Image
-                      source={{ uri: item.iconUrl }}
+                      source={{ uri: displayImageUrl }}
                       style={{ width: 60, height: 60, borderRadius: 30 }}
                     />
                   ) : (
@@ -238,11 +351,10 @@ export const ShopScreen: React.FC = () => {
                     {item.name}
                   </Text>
                   <Text style={styles.itemType}>
-                    {item.type.toUpperCase()} · {item.price} B
+                    {String(item.type).toUpperCase()} · {item.price} B
                   </Text>
                 </View>
 
-                {/* 底部按鈕：依 owned 決定行為 */}
                 {owned ? (
                   item.type === 'filter' ? (
                     <TouchableOpacity
@@ -270,15 +382,9 @@ export const ShopScreen: React.FC = () => {
             );
           }}
           ListEmptyComponent={
-            !isLoading ? (
-              <Text
-                style={{
-                  textAlign: 'center',
-                  marginTop: 16,
-                  fontSize: FONT_SIZES.sm,
-                }}
-              >
-                目前沒有可購買的商品
+            !isLoading && filteredItems.length === 0 ? (
+              <Text style={{ textAlign: 'center', marginTop: 16, fontSize: FONT_SIZES.sm, color: '#6B7280' }}>
+                目前沒有符合篩選條件的商品
               </Text>
             ) : null
           }
@@ -287,8 +393,6 @@ export const ShopScreen: React.FC = () => {
     </ScreenContainer>
   );
 };
-
-// （styles 保持原本那段就好）
 
 const styles = StyleSheet.create({
   container: {
@@ -309,6 +413,41 @@ const styles = StyleSheet.create({
     color: '#888',
     marginTop: 4,
   },
+  // --- 修正後的篩選器樣式 (確保高度固定) ---
+  filterListContainer: { // 新增的容器，控制垂直間距
+    marginBottom: SPACING.sm, 
+    paddingVertical: SPACING.sm / 2, // 確保上下的最小間距
+  },
+  filterList: {
+    // FlatList 本身不需要垂直 padding
+  },
+  filterListContent: {
+    paddingHorizontal: SPACING.lg,
+    alignItems: 'center', // 確保內容垂直置中
+    minHeight: 38, 
+  },
+  filterButton: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm / 2, // 固定按鈕內部 padding
+    marginRight: SPACING.sm,
+    borderRadius: 20,
+    backgroundColor: '#E5E7EB', 
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  filterButtonSelected: {
+    backgroundColor: COLORS.secondary, 
+    borderColor: COLORS.secondary,
+  },
+  filterText: {
+    fontSize: FONT_SIZES.sm,
+    color: '#4B5563', 
+    fontWeight: FONT_WEIGHTS.semibold,
+  },
+  filterTextSelected: {
+    color: '#FFFFFF', 
+  },
+  // ------------------------------------
   listContent: {
     paddingHorizontal: SPACING.lg,
     paddingBottom: SPACING.xl,
