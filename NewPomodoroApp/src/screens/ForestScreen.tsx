@@ -5,7 +5,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Alert } from 'react-native';
-import { useRoute, useNavigation, RouteProp, useIsFocused } from '@react-navigation/native';
+import { useRoute, RouteProp, useIsFocused } from '@react-navigation/native';
 import {
   ScreenContainer,
   TopBar,

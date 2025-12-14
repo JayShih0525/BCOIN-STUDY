@@ -2638,8 +2638,34 @@ PODS:
     - ReactCommon/turbomodule/core
     - SocketRocket
     - Yoga
-  - RNCClipboard (1.5.1):
+  - RNCClipboard (1.16.3):
+    - boost
+    - DoubleConversion
+    - fast_float
+    - fmt
+    - glog
+    - hermes-engine
+    - RCT-Folly
+    - RCT-Folly/Fabric
+    - RCTRequired
+    - RCTTypeSafety
     - React-Core
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - SocketRocket
+    - Yoga
   - RNDateTimePicker (8.5.1):
     - boost
     - DoubleConversion
@@ -2904,7 +2930,7 @@ DEPENDENCIES:
   - ReactCodegen (from `build/generated/ios`)
   - ReactCommon/turbomodule/core (from `../node_modules/react-native/ReactCommon`)
   - "RNCAsyncStorage (from `../node_modules/@react-native-async-storage/async-storage`)"
-  - "RNCClipboard (from `../node_modules/@react-native-community/clipboard`)"
+  - "RNCClipboard (from `../node_modules/@react-native-clipboard/clipboard`)"
   - "RNDateTimePicker (from `../node_modules/@react-native-community/datetimepicker`)"
   - RNFS (from `../node_modules/react-native-fs`)
   - RNPermissions (from `../node_modules/react-native-permissions`)
@@ -3083,7 +3109,7 @@ EXTERNAL SOURCES:
   RNCAsyncStorage:
     :path: "../node_modules/@react-native-async-storage/async-storage"
   RNCClipboard:
-    :path: "../node_modules/@react-native-community/clipboard"
+    :path: "../node_modules/@react-native-clipboard/clipboard"
   RNDateTimePicker:
     :path: "../node_modules/@react-native-community/datetimepicker"
   RNFS:
@@ -3183,7 +3209,7 @@ SPEC CHECKSUMS:
   ReactCodegen: 878add6c7d8ff8cea87697c44d29c03b79b6f2d9
   ReactCommon: 804dc80944fa90b86800b43c871742ec005ca424
   RNCAsyncStorage: 29f0230e1a25f36c20b05f65e2eb8958d6526e82
-  RNCClipboard: b0541df1bb88935d40bdc93b41b7d8e3334c998a
+  RNCClipboard: 4b58c780f63676367640f23c8e114e9bd0cf86ac
   RNDateTimePicker: 243cc82889368422dab234d73dec63d6cdb1e70f
   RNFS: 89de7d7f4c0f6bafa05343c578f61118c8282ed8
   RNPermissions: 38357a69e7fdafbbb6b287d32a3dfff6ffd5e42a
