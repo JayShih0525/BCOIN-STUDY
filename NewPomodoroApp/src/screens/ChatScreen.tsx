@@ -20,7 +20,8 @@ import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 // ★ 引入 Clipboard 和下載所需的模組
-import Clipboard from '@react-native-community/clipboard'; 
+import Clipboard from '@react-native-clipboard/clipboard';
+// import Clipboard from '@react-native-community/clipboard'; 
 import { check, request, PERMISSIONS, RESULTS } from 'react-native-permissions';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import RNFS from 'react-native-fs'; 

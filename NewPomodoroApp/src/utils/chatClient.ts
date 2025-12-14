@@ -3,8 +3,8 @@ import TcpSocket from 'react-native-tcp-socket';
 import { useFocusEffect } from '@react-navigation/native';
 import { useCallback } from 'react';
 
-const HOST = 'Jays-MacBook-Pro-10.local';
-// const HOST = '61.224.32.83';
+// const HOST = 'Jays-MacBook-Pro-10.local';
+const HOST = '61.224.32.83';
 const PORT = 9090;
 
 
