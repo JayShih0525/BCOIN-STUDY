@@ -592,7 +592,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    top: 0,
+    top: 25,
     bottom: 0,
     alignSelf: 'center',
   },
