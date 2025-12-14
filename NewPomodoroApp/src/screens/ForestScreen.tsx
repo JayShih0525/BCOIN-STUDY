@@ -117,7 +117,7 @@ export const ForestScreen: React.FC = () => {
 
     const interval = setInterval(() => {
       console.log('⏱️ +1 coin (10 秒)');
-      addCoins(1); // 先改本地 state，hook 裡自己決定什麼時候同步到 DB
+      addCoins(10); 
     }, 10_000);
 
     return () => clearInterval(interval);

@@ -5,6 +5,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 // 引入 Ionicons 來顯示好看的聊天圖示 (如果你的專案還沒設定好 icon，可以用 Emoji 暫代)
 import Ionicons from 'react-native-vector-icons/Ionicons'; 
 import { COLORS, SPACING, BORDER_RADIUS, FONT_SIZES, FONT_WEIGHTS } from '../constants/theme';
+import { useNavigation } from '@react-navigation/native';
 
 interface TopBarProps {
     coins: number;
@@ -16,17 +17,31 @@ interface TopBarProps {
 }
 
 export const TopBar: React.FC<TopBarProps> = ({ 
-    coins, 
+    coins = 0, 
     onSettingsPress, 
     onChatPress, 
     unreadCount = 0 
 }) => {
+    // 3. 在組件內部取得 navigation
+    const navigation = useNavigation<any>();
+
+    // 4. 定義點擊處理函式
+    const handleChatPress = () => {
+        if (onChatPress) {
+            // 如果外部有傳入自定義行為，就執行外部的
+            onChatPress();
+        } else {
+            // 如果沒傳，預設跳轉到 ChatList
+            navigation.navigate('ChatList');
+        }
+    };
+
     return (
         <View style={styles.topBar}>
             {/* ★ 左側：聊天按鈕 */}
             <TouchableOpacity 
                 style={styles.chatButton} 
-                onPress={onChatPress}
+                onPress={handleChatPress}
             >
                 {/* 使用 Icon */}
                 <Ionicons name="chatbubbles-outline" size={24} color={COLORS.black} />

@@ -19,5 +19,5 @@ export const getAvatarUrl = (userId: string): string => {
 
   // 3. 回傳完整網址
   // backgroundColor=transparent: 讓背景透明
-  return `https://api.dicebear.com/9.x/${style}/png?seed=${encodedSeed}&backgroundColor=transparent`;
+  return `https://api.dicebear.com/9.x/adventurer-neutral/png?seed=${userId}&backgroundColor=transparent`;
 };

@@ -21,9 +21,12 @@ export type RootStackParamList = {
     schoolName: string;
   };
   Chat: {
+    roomId?: string;
     targetUserId: string;
     targetUserName: string;
+    isGroup?: boolean;
   };
+  ChatList: undefined; // ★ 名稱是 ChatList
 };
 
 export type TabScreenName = keyof RootTabParamList;

@@ -18,6 +18,7 @@ import { FilterCameraScreen } from './src/screens/FilterCameraScreen';
 import { CoinsProvider } from './src/context/CoinsContext';
 import { SchoolDetailScreen } from './src/screens/SchoolDetailScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
+import { ChatListScreen } from './src/screens/ChatListScreen';
 import { UnreadProvider } from './src/context/UnreadContext';
 import { connectChatServer, disconnectChatServer } from './src/utils/chatClient';
 import type { RootStackParamList } from './src/types/navigation';
@@ -47,6 +48,8 @@ function MainStack() {
       <Stack.Screen name="SchoolDetail" component={SchoolDetailScreen} />
       {/* 單一聊天頁面 */}
       <Stack.Screen name="Chat" component={ChatScreen} />
+      {/* 聊天列表頁面 */}
+      <Stack.Screen name="ChatList" component={ChatListScreen} />
     </Stack.Navigator>
   );
 }
