@@ -10,10 +10,9 @@ import {
   TextInput,
   Alert,
   ActivityIndicator,
-  // ★ 引入 RefreshControl
   RefreshControl,
 } from 'react-native';
-import { useNavigation, useFocusEffect } from '@react-navigation/native'; 
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 import { ScreenContainer, TopBar } from '../components';
@@ -39,11 +38,10 @@ interface ChatRoomSummary {
   lastMessage?: string | null;
   lastMessageTime?: string | null;
   isGroup: boolean;
-  targetUserId?: string | null; 
+  targetUserId?: string | null;
   avatarUrl?: string | null;
 }
 
-// 與 Supabase RPC 'get_user_chat_list' 的回傳欄位對應
 interface SupabaseChatRoomSummary {
   room_id: string;
   name: string;
@@ -64,22 +62,18 @@ export const ChatListScreen: React.FC = () => {
 
   const [rooms, setRooms] = useState<ChatRoomSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  // ★ 新增：下拉刷新狀態
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // 群組創建相關 State
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
-  // ★ 預覽 Modal 狀態 (保留以防未來使用)
   const [previewModalVisible, setPreviewModalVisible] = useState(false);
   const [previewContent, setPreviewContent] = useState<ChatRoomSummary | null>(null);
 
-
-  // 輔助 Ref
   const didInitialLoadRef = useRef(false);
   const isFetchingRef = useRef(false);
+  const listenerRef = useRef<((msg: any) => void) | null>(null);
 
   // ------------------------------
   // Helpers
@@ -102,133 +96,129 @@ export const ChatListScreen: React.FC = () => {
     const encodedSeed = encodeURIComponent(seed || 'default');
     return `https://api.dicebear.com/9.x/adventurer-neutral/png?seed=${encodedSeed}&backgroundColor=transparent`;
   }, []);
-  
-  // ★ 修正 isImageUrl: 使用更精確的 Supabase URL 判斷
+
+  // ✅ 更穩的圖片判斷（支援 querystring、jpeg/webp/gif）
   const isImageUrl = (content?: string | null) => {
-      if (!content) return false;
-      const supabaseUrl = 'https://jbcfmrpycmoffahbhfnr.supabase.co/storage/v1/object/public/chat-images/';
-      return content.startsWith(supabaseUrl) || (content.includes('http') && (content.includes('.jpg') || content.includes('.png')));
+    if (!content) return false;
+    const s = content.trim();
+
+    // supabase public storage（你的 chat-images 路徑）
+    if (s.includes('/storage/v1/object/public/chat-images/')) return true;
+
+    // 一般圖片網址判斷
+    if (!/^https?:\/\//i.test(s)) return false;
+    return /\.(png|jpg|jpeg|webp|gif)(\?.*)?$/i.test(s);
   };
 
-  // 處理最後一條訊息的顯示內容
   const displayLastMessage = (item: ChatRoomSummary) => {
-      if (!item.lastMessage) {
-          return '尚無訊息';
-      }
-
-      if (isImageUrl(item.lastMessage)) {
-          if (item.isGroup) {
-              return '[相片]';
-          } else {
-              return `${item.name || '用戶'} 傳送了相片`;
-          }
-      }
-      
-      return item.lastMessage.trim();
+    if (!item.lastMessage) return '尚無訊息';
+    if (isImageUrl(item.lastMessage)) return '[相片]';
+    return item.lastMessage.trim();
   };
 
   // ------------------------------
-  // 1) Fetch Rooms (Real Data)
+  // 1) Fetch Rooms
   // ------------------------------
-  // 讓此函數可以被下拉更新調用
-  const fetchRooms = useCallback(async (isPullToRefresh = false) => {
-    if (!user?.id) return;
-    if (isFetchingRef.current) return;
+  const fetchRooms = useCallback(
+    async (isPullToRefresh = false) => {
+      if (!user?.id) return;
+      if (isFetchingRef.current) return;
 
-    isFetchingRef.current = true;
-    
-    // 只有初始載入時顯示 Loading Spinner，下拉更新使用 RefreshControl
-    if (!isPullToRefresh) {
-        setLoading(true);
-    }
+      isFetchingRef.current = true;
+      if (!isPullToRefresh) setLoading(true);
 
-    try {
-      const { data, error } = await supabase.rpc('get_user_chat_list', {
-        p_user_id: user.id,
-      });
+      try {
+        const { data, error } = await supabase.rpc('get_user_chat_list', {
+          p_user_id: user.id,
+        });
 
-      if (error) {
-        console.error('[get_user_chat_list] RPC Error:', error);
-        throw error;
-      }
-
-      const realRooms = (data ?? []) as SupabaseChatRoomSummary[];
-
-      // 1. 轉換並初始化 baseRooms
-      const baseRooms: ChatRoomSummary[] = realRooms.map((row) => ({
-        roomId: row.room_id,
-        name: row.name,
-        isGroup: !!row.is_group,
-        targetUserId: row.target_user_id ?? null,
-        lastMessage: row.last_message ?? null,
-        lastMessageTime: row.last_message_time ?? null,
-        avatarUrl: null,
-      }));
-
-      // 2. 批量查 user_profiles 的 avatar_url
-      const targetIds = baseRooms
-        .filter((r) => !r.isGroup && r.targetUserId)
-        .map((r) => r.targetUserId!) as string[];
-
-      if (targetIds.length > 0) {
-        const { data: profiles, error: pErr } = await supabase
-          .from('user_profiles')
-          .select('user_id, avatar_url')
-          .in('user_id', targetIds);
-
-        if (!pErr && profiles) {
-          const map = new Map<string, string | null>();
-          profiles.forEach((p: any) => map.set(p.user_id, p.avatar_url));
-
-          baseRooms.forEach((r) => {
-            if (!r.isGroup && r.targetUserId) {
-              r.avatarUrl = map.get(r.targetUserId) ?? null;
-            }
-          });
+        if (error) {
+          console.error('[get_user_chat_list] RPC Error:', error);
+          throw error;
         }
-      }
 
-      setRooms(baseRooms);
-    } catch (e) {
-      console.error('Error fetching chat list:', e);
-      Alert.alert('錯誤', '無法載入聊天列表');
-      setRooms([]);
-    } finally {
-      setLoading(false);
-      isFetchingRef.current = false;
-      // 結束下拉刷新狀態
-      if (isPullToRefresh) {
-          setIsRefreshing(false);
-      }
-    }
-  }, [user?.id]);
+        const realRooms = (data ?? []) as SupabaseChatRoomSummary[];
 
-  // ★ 新增：處理下拉更新的函數
+        const baseRooms: ChatRoomSummary[] = realRooms.map((row) => ({
+          roomId: row.room_id,
+          name: row.name,
+          isGroup: !!row.is_group,
+          targetUserId: row.target_user_id ?? null,
+          lastMessage: row.last_message ?? null,
+          lastMessageTime: row.last_message_time ?? null,
+          avatarUrl: null,
+        }));
+
+        // 批量查對方頭像
+        const targetIds = Array.from(
+          new Set(
+            baseRooms
+              .filter((r) => !r.isGroup && r.targetUserId)
+              .map((r) => r.targetUserId!) as string[]
+          )
+        );
+
+        if (targetIds.length > 0) {
+          const { data: profiles, error: pErr } = await supabase
+            .from('user_profiles')
+            .select('user_id, avatar_url')
+            .in('user_id', targetIds);
+
+          if (!pErr && profiles) {
+            const map = new Map<string, string | null>();
+            profiles.forEach((p: any) => map.set(p.user_id, p.avatar_url ?? null));
+
+            baseRooms.forEach((r) => {
+              if (!r.isGroup && r.targetUserId) {
+                r.avatarUrl = map.get(r.targetUserId) ?? null;
+              }
+            });
+          }
+        }
+
+        setRooms(baseRooms);
+      } catch (e) {
+        console.error('Error fetching chat list:', e);
+        Alert.alert('錯誤', '無法載入聊天列表');
+        setRooms([]);
+      } finally {
+        if (!isPullToRefresh) setLoading(false);
+        isFetchingRef.current = false;
+        if (isPullToRefresh) setIsRefreshing(false);
+      }
+    },
+    [user?.id]
+  );
+
   const onRefresh = useCallback(() => {
     setIsRefreshing(true);
-    fetchRooms(true); // 傳入 true 標記為下拉更新
+    fetchRooms(true);
   }, [fetchRooms]);
-
 
   // ------------------------------
   // 2) Focus Effect (Load + Listener)
   // ------------------------------
   useFocusEffect(
     useCallback(() => {
-      // 首次載入
+      if (!user?.id) return;
+
+      // 初次載入
       if (!didInitialLoadRef.current) {
         didInitialLoadRef.current = true;
-        fetchRooms();
+        fetchRooms(false);
       }
-
-      // 設置 TCP 訊息監聽器 (用於即時更新列表順序)
-      if (!user?.id) return;
 
       let cancelled = false;
 
-      (async () => {
+      const attach = async () => {
         const ok = await connectChatServer(user.id);
         if (!ok || cancelled) return;
+
+        // ✅ 先確保不會重複掛 listener
+        if (listenerRef.current) {
+          removeChatListener(listenerRef.current);
+          listenerRef.current = null;
+        }
 
         const listener = (msg: any) => {
           if (!msg || typeof msg !== 'object' || msg.type !== 'MESSAGE') return;
@@ -237,155 +227,156 @@ export const ChatListScreen: React.FC = () => {
 
           setRooms((prev) => {
             const idx = prev.findIndex((r) => r.roomId === roomId);
-            
             if (idx === -1) {
-              fetchRooms();
+              // 不在列表中：避免頻繁 fetch，改成「標記」後由 user 下拉 or 回到頁面再刷新
+              // 如果你仍想立刻同步新聊天室，可解除下一行註解：
+              // fetchRooms(true);
               return prev;
             }
 
-            const updated = { ...prev[idx], lastMessage: content, lastMessageTime: createdAt };
+            const updated = {
+              ...prev[idx],
+              lastMessage: content,
+              lastMessageTime: createdAt,
+            };
+
             const next = [...prev];
             next.splice(idx, 1);
             return [updated, ...next];
           });
         };
 
+        listenerRef.current = listener;
         addChatListener(listener);
-        return () => {
-          removeChatListener(listener);
-        };
-      })();
+      };
 
+      void attach();
+
+      // ✅ 正確清理：focus 結束時移除 listener
       return () => {
         cancelled = true;
+        if (listenerRef.current) {
+          removeChatListener(listenerRef.current);
+          listenerRef.current = null;
+        }
       };
     }, [user?.id, fetchRooms])
   );
 
   // ------------------------------
-  // 3) Group Create (Mock to UI)
+  // 3) Group Create
   // ------------------------------
   const handleCreateGroup = async () => {
     if (!newGroupName.trim()) {
       Alert.alert('錯誤', '請輸入群組名稱');
       return;
     }
+    if (!user?.id) {
+      Alert.alert('錯誤', '用戶未登入');
+      return;
+    }
+
     setIsCreating(true);
     try {
-      await new Promise(r => setTimeout(() => r(true), 1000)); 
-      
-      const newRoomId = `group_${Date.now()}`;
+      const { data, error } = await supabase.rpc('create_group_room', {
+        p_creator_id: user.id,
+        p_group_name: newGroupName.trim(),
+      });
 
-      const newRoom: ChatRoomSummary = {
-        roomId: newRoomId,
-        name: newGroupName,
-        isGroup: true,
-        lastMessage: '群組已建立',
-        lastMessageTime: new Date().toISOString(),
-        targetUserId: null,
-        avatarUrl: null,
-      };
+      if (error) throw error;
 
-      setRooms((prev) => [newRoom, ...prev]);
+      const newRoomId = String(data);
+
+      // ✅ 建好後直接刷新一次：避免前端假資料和後端不同步
       setShowCreateModal(false);
       setNewGroupName('');
+      await fetchRooms(true);
 
       navigation.navigate('Chat', {
         roomId: newRoomId,
-        targetUserName: newGroupName,
+        targetUserName: newGroupName.trim(),
         isGroup: true,
       });
-    } catch (e) {
-      Alert.alert('建立失敗', '無法建立群組');
+    } catch (e: any) {
+      console.error('建立群組失敗:', e);
+      Alert.alert('建立失敗', e.message || '無法建立群組，請檢查後端配置。');
     } finally {
       setIsCreating(false);
     }
   };
 
   // ------------------------------
-  // 4) UI Helpers
+  // UI Helpers
   // ------------------------------
   const handleGoBack = () => {
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-    } else {
-      navigation.navigate('Tabs'); 
-    }
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate('Tabs');
   };
 
   const openRoom = (item: ChatRoomSummary) => {
-    if (!item.isGroup && !item.targetUserId) {
+    // ✅ 群組：直接進
+    if (item.isGroup) {
+      navigation.navigate('Chat', { roomId: item.roomId, isGroup: true, targetUserName: item.name });
+      return;
+    }
+    if (!item.targetUserId) {
       Alert.alert('資料異常', '聊天室缺少目標用戶 ID');
       return;
     }
 
     navigation.navigate('Chat', {
       roomId: item.roomId,
-      targetUserId: item.targetUserId || user!.id,
+      isGroup: false,
+      targetUserId: item.targetUserId,
       targetUserName: item.name,
-      isGroup: item.isGroup,
     });
   };
-  
-  // ★ 長按預覽邏輯 (保留以防未來使用)
+
   const handleLongPressPreview = (item: ChatRoomSummary) => {
-      setPreviewContent(item);
-      setPreviewModalVisible(true);
+    setPreviewContent(item);
+    setPreviewModalVisible(true);
   };
 
   const handleClosePreview = () => {
-      setPreviewModalVisible(false);
-      setTimeout(() => setPreviewContent(null), 100); 
+    setPreviewModalVisible(false);
+    setTimeout(() => setPreviewContent(null), 100);
   };
-  
+
   const handleMarkAsRead = (item: ChatRoomSummary) => {
-    // 假設您在 ChatListScreen 內部沒有 clearRoomUnread，因此從 context 傳入
-    // 在您的 useFocusEffect 中，clearRoomUnread 是從 useUnread 導入的
-    if (clearRoomUnread) {
-        clearRoomUnread(item.roomId);
-    }
+    clearRoomUnread?.(item.roomId);
     Alert.alert('提示', `${item.name} 的訊息已設為已讀。`);
     handleClosePreview();
   };
 
   const handleDeleteChat = (item: ChatRoomSummary) => {
-    Alert.alert(
-        '確認刪除',
-        `您確定要刪除與 ${item.name} 的所有對話記錄嗎？`,
-        [
-            { text: '取消', style: 'cancel' },
-            { 
-                text: '刪除', 
-                style: 'destructive', 
-                onPress: async () => {
-                    // TODO: 在這裡實現 Supabase 刪除對話記錄的邏輯
-                    Alert.alert('提示', `${item.name} 的對話記錄已在前端模擬刪除。`);
-                    fetchRooms();
-                    handleClosePreview();
-                } 
-            },
-        ]
-    );
+    Alert.alert('確認刪除', `您確定要刪除與 ${item.name} 的所有對話記錄嗎？`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '刪除',
+        style: 'destructive',
+        onPress: async () => {
+          Alert.alert('提示', `${item.name} 的對話記錄已在前端模擬刪除。`);
+          fetchRooms(true);
+          handleClosePreview();
+        },
+      },
+    ]);
   };
-
 
   const renderItem = ({ item }: { item: ChatRoomSummary }) => {
     const unreadCount = unread.perRoom[item.roomId] || 0;
     const timeStr = formatListTime(item.lastMessageTime);
 
     const avatarUri =
-      item.isGroup
-        ? null
-        : (item.avatarUrl || fallbackAvatar(item.targetUserId || 'unknown'));
+      item.isGroup ? null : item.avatarUrl || fallbackAvatar(item.targetUserId || 'unknown');
 
     return (
-      <TouchableOpacity 
-        style={styles.roomItem} 
-        onPress={() => openRoom(item)} 
-        onLongPress={() => handleLongPressPreview(item)} 
+      <TouchableOpacity
+        style={styles.roomItem}
+        onPress={() => openRoom(item)}
+        onLongPress={() => handleLongPressPreview(item)}
         activeOpacity={0.75}
       >
-        {/* 頭像區域 */}
         <View style={styles.avatarContainer}>
           {item.isGroup ? (
             <View style={[styles.avatar, styles.groupAvatar]}>
@@ -397,7 +388,7 @@ export const ChatListScreen: React.FC = () => {
 
           {unreadCount > 0 && (
             <View style={styles.unreadBadge}>
-              <Text style={styles.unreadText}>{(unreadCount > 99 ? '99+' : unreadCount)}</Text>
+              <Text style={styles.unreadText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
             </View>
           )}
         </View>
@@ -410,7 +401,6 @@ export const ChatListScreen: React.FC = () => {
             <Text style={styles.timeText}>{timeStr}</Text>
           </View>
 
-          {/* 顯示最後一條訊息內容 */}
           <Text style={styles.lastMsg} numberOfLines={1}>
             {displayLastMessage(item)}
           </Text>
@@ -421,30 +411,29 @@ export const ChatListScreen: React.FC = () => {
 
   return (
     <ScreenContainer>
-      {/* 這裡不再傳入 onSettingsPress，使用 TopBar 的預設導航 */}
-      <TopBar coins={coins} unreadCount={unread.total} /> 
+      <TopBar coins={coins} unreadCount={unread.total} />
 
       <View style={styles.customHeader}>
-        {/* 1. 左側按鈕 */}
-        <TouchableOpacity 
-          onPress={handleGoBack} 
-          style={styles.backButtonTouchArea} 
+        <TouchableOpacity
+          onPress={handleGoBack}
+          style={styles.backButtonTouchArea}
           activeOpacity={0.7}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
           <Ionicons name="chevron-back" size={28} color={COLORS.black} />
         </TouchableOpacity>
 
-        {/* 2. 中間標題 (使用絕對定位強制居中) */}
         <Text style={styles.pageTitle}>訊息列表</Text>
 
-        {/* 3. 右側元素群組 (用於對齊) */}
-        <View style={styles.rightHeaderGroup}> 
-          <TouchableOpacity onPress={() => setShowCreateModal(true)} style={styles.createBtn} activeOpacity={0.8}>
+        <View style={styles.rightHeaderGroup}>
+          <TouchableOpacity
+            onPress={() => setShowCreateModal(true)}
+            style={styles.createBtn}
+            activeOpacity={0.8}
+          >
             <Ionicons name="add" size={24} color="#FFF" />
           </TouchableOpacity>
-          {/* 3b. 佔位符 */}
-          <View style={styles.spacerRight} /> 
+          <View style={styles.spacerRight} />
         </View>
       </View>
 
@@ -463,13 +452,12 @@ export const ChatListScreen: React.FC = () => {
                 <Text style={styles.emptyText}>還沒有任何對話</Text>
               </View>
             }
-            // ★ 實作下拉更新
             refreshControl={
-                <RefreshControl
-                    refreshing={isRefreshing}
-                    onRefresh={onRefresh}
-                    tintColor={COLORS.primary}
-                />
+              <RefreshControl
+                refreshing={isRefreshing}
+                onRefresh={onRefresh}
+                tintColor={COLORS.primary}
+              />
             }
           />
         )}
@@ -485,106 +473,100 @@ export const ChatListScreen: React.FC = () => {
               placeholder="輸入群組名稱"
               value={newGroupName}
               onChangeText={setNewGroupName}
+              editable={!isCreating}
             />
             <View style={styles.modalBtns}>
-              <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={() => setShowCreateModal(false)}>
+              <TouchableOpacity
+                style={[styles.btn, styles.btnCancel]}
+                onPress={() => setShowCreateModal(false)}
+                disabled={isCreating}
+              >
                 <Text style={styles.btnTextCancel}>取消</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.btn, styles.btnConfirm]} onPress={handleCreateGroup} disabled={isCreating}>
+              <TouchableOpacity
+                style={[styles.btn, styles.btnConfirm]}
+                onPress={handleCreateGroup}
+                disabled={isCreating || !newGroupName.trim()}
+              >
                 {isCreating ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnTextConfirm}>建立</Text>}
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
-      
-      {/* ★★★ 長按預覽 Modal (懸浮卡片效果) ★★★ */}
-      <Modal 
-          visible={previewModalVisible} 
-          transparent 
-          animationType="fade"
-          onRequestClose={handleClosePreview}
+
+      {/* 長按預覽 Modal */}
+      <Modal
+        visible={previewModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={handleClosePreview}
       >
-          {/* 整個屏幕作為遮罩，點擊時關閉 Modal */}
-          <TouchableOpacity 
-              style={styles.previewModalOverlay} 
-              onPress={handleClosePreview} 
-              activeOpacity={1}
-          >
-              {previewContent && (
-                  // 預覽內容 - 阻止點擊內部時關閉 Modal
-                  <TouchableOpacity 
-                      activeOpacity={1} 
-                      style={styles.previewModalContent}
-                      onPress={() => { /* 點擊內容不做任何事 */ }} 
+        <TouchableOpacity
+          style={styles.previewModalOverlay}
+          onPress={handleClosePreview}
+          activeOpacity={1}
+        >
+          {previewContent && (
+            <TouchableOpacity activeOpacity={1} style={styles.previewModalContent} onPress={() => {}}>
+              <View style={styles.previewInfo}>
+                <Text style={styles.previewRoomName}>{previewContent.name}</Text>
+                <Text style={styles.previewTime}>{formatListTime(previewContent.lastMessageTime)}</Text>
+              </View>
+
+              <View style={styles.separator} />
+              <Text style={styles.previewLastMsg} numberOfLines={3}>
+                {displayLastMessage(previewContent)}
+              </Text>
+
+              <View style={styles.previewActions}>
+                {(unread.perRoom[previewContent.roomId] || 0) > 0 && (
+                  <TouchableOpacity
+                    style={styles.actionButtonSmall}
+                    onPress={() => handleMarkAsRead(previewContent)}
                   >
-                      {/* --- 1. 頂部資訊 --- */}
-                      <View style={styles.previewInfo}>
-                          <Text style={styles.previewRoomName}>{previewContent.name}</Text>
-                          <Text style={styles.previewTime}>
-                              {formatListTime(previewContent.lastMessageTime)}
-                          </Text>
-                      </View>
-
-                      {/* --- 2. 訊息內容 --- */}
-                      <View style={styles.separator} />
-                      <Text style={styles.previewLastMsg} numberOfLines={3}> 
-                          {displayLastMessage(previewContent)}
-                      </Text>
-
-                      {/* --- 3. 操作選單 (新增) --- */}
-                      <View style={styles.previewActions}>
-                          {/* 設為已讀按鈕 (僅在有未讀時顯示) */}
-                          {unread.perRoom[previewContent.roomId] > 0 && (
-                              <TouchableOpacity 
-                                  style={styles.actionButtonSmall}
-                                  onPress={() => handleMarkAsRead(previewContent)}
-                              >
-                                  <Ionicons name="checkmark-done" size={20} color={COLORS.primary} />
-                                  <Text style={styles.actionTextSmall}>設為已讀</Text>
-                              </TouchableOpacity>
-                          )}
-
-                          {/* 刪除按鈕 */}
-                          <TouchableOpacity 
-                              style={styles.actionButtonSmall}
-                              onPress={() => handleDeleteChat(previewContent)}
-                          >
-                              <Ionicons name="trash-outline" size={20} color="#EF4444" />
-                              <Text style={styles.actionTextSmallDanger}>刪除</Text>
-                          </TouchableOpacity>
-                      </View>
-                      
-                      <View style={styles.separator} />
-
-                      {/* --- 4. 底部進入聊天室按鈕 --- */}
-                      <TouchableOpacity 
-                          style={styles.previewGoToChatBtn}
-                          onPress={() => {
-                              handleClosePreview();
-                              openRoom(previewContent);
-                          }}
-                      >
-                          <Text style={styles.previewGoToChatText}>進入聊天室</Text>
-                          {/* 顯示未讀數徽章 (如果還有未讀) */}
-                          {unread.perRoom[previewContent.roomId] > 0 && (
-                              <View style={styles.previewUnreadBadge}>
-                                  <Text style={styles.unreadText}>
-                                      {unread.perRoom[previewContent.roomId] > 99 ? '99+' : unread.perRoom[previewContent.roomId]}
-                                  </Text>
-                              </View>
-                          )}
-                      </TouchableOpacity>
+                    <Ionicons name="checkmark-done" size={20} color={COLORS.primary} />
+                    <Text style={styles.actionTextSmall}>設為已讀</Text>
                   </TouchableOpacity>
-              )}
-          </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                  style={styles.actionButtonSmall}
+                  onPress={() => handleDeleteChat(previewContent)}
+                >
+                  <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                  <Text style={styles.actionTextSmallDanger}>刪除</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.separator} />
+
+              <TouchableOpacity
+                style={styles.previewGoToChatBtn}
+                onPress={() => {
+                  handleClosePreview();
+                  openRoom(previewContent);
+                }}
+              >
+                <Text style={styles.previewGoToChatText}>進入聊天室</Text>
+                {(unread.perRoom[previewContent.roomId] || 0) > 0 && (
+                  <View style={styles.previewUnreadBadge}>
+                    <Text style={styles.unreadText}>
+                      {(unread.perRoom[previewContent.roomId] || 0) > 99 ? '99+' : unread.perRoom[previewContent.roomId]}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            </TouchableOpacity>
+          )}
+        </TouchableOpacity>
       </Modal>
     </ScreenContainer>
   );
 };
 
 // ------------------------------
-// Styles
+// Styles (你的原本樣式保留)
 // ------------------------------
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
@@ -598,45 +580,40 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6',
     backgroundColor: '#FFF',
-    position: 'relative', 
+    position: 'relative',
   },
 
-  // ★ 修正點：調整字體大小為 FONT_SIZES.lg
   pageTitle: {
-    fontSize: 25, 
+    fontSize: FONT_SIZES.lg,
     fontWeight: FONT_WEIGHTS.bold,
     color: COLORS.black,
     textAlign: 'center',
-    textAlignVertical: 'center', // 確保 Android 上的垂直居中
-    
-    // 絕對定位實現居中
+    textAlignVertical: 'center',
     position: 'absolute',
     left: 0,
     right: 0,
-    top: 25, // 設為 0
-    bottom: 0, // 設為 0
-    alignSelf: 'center', // 確保組件容器居中
+    top: 0,
+    bottom: 0,
+    alignSelf: 'center',
   },
 
-  // 左側按鈕區域：寬度 60
   backButtonTouchArea: {
-    width: 60, 
+    width: 60,
     height: 48,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: SPACING.md,
     backgroundColor: '#F3F4F6',
     borderRadius: 24,
-    zIndex: 10, // 確保按鈕在標題上方
+    zIndex: 10,
   },
-  
-  // 右側容器：總寬度與左側對齊
+
   rightHeaderGroup: {
     flexDirection: 'row',
     alignItems: 'center',
-    width: 60, 
+    width: 60,
     justifyContent: 'flex-end',
-    zIndex: 10, // 確保按鈕在標題上方
+    zIndex: 10,
   },
 
   createBtn: {
@@ -648,12 +625,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
-  spacerRight: {
-    width: 10, 
-    height: 1, 
-  },
-  
-  // 列表項目樣式
+  spacerRight: { width: 10, height: 1 },
+
   roomItem: {
     flexDirection: 'row',
     padding: SPACING.md,
@@ -712,7 +685,6 @@ const styles = StyleSheet.create({
   emptyView: { alignItems: 'center', marginTop: 50 },
   emptyText: { marginTop: 10, color: '#9CA3AF' },
 
-  // --- 建立群組 Modal 樣式 ---
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -749,99 +721,66 @@ const styles = StyleSheet.create({
   btnTextCancel: { color: '#4B5563', fontWeight: '600' },
   btnTextConfirm: { color: '#FFF', fontWeight: '600' },
 
-  // --- 預覽 Modal 樣式 (懸浮卡片) ---
   previewModalOverlay: {
-      flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.01)', // 幾乎透明的遮罩
-      justifyContent: 'flex-end',          // 內容靠底部對齊
-      alignItems: 'center',
-      paddingBottom: 50,                   // 距離底部留出空間
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.01)',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    paddingBottom: 50,
   },
   previewModalContent: {
-      width: '85%',
-      backgroundColor: '#FFF',
-      borderRadius: 20, 
-      padding: SPACING.lg,
-      maxHeight: 300, 
-      elevation: 10,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.2, 
-      shadowRadius: 15,
+    width: '85%',
+    backgroundColor: '#FFF',
+    borderRadius: 20,
+    padding: SPACING.lg,
+    maxHeight: 300,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 15,
   },
-  previewInfo: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-  },
+  previewInfo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   previewRoomName: {
-      fontSize: FONT_SIZES.xl,
-      fontWeight: FONT_WEIGHTS.bold,
-      color: COLORS.black,
-      marginBottom: 4,
+    fontSize: FONT_SIZES.xl,
+    fontWeight: FONT_WEIGHTS.bold,
+    color: COLORS.black,
+    marginBottom: 4,
   },
-  previewTime: {
-      fontSize: 12,
-      color: '#9CA3AF',
-      marginBottom: 8,
-  },
-  separator: {
-      height: 1,
-      backgroundColor: '#F3F4F6',
-      marginVertical: 10,
-  },
-  previewLastMsg: {
-      fontSize: 15,
-      color: '#374151',
-      marginBottom: 16,
-  },
-  // 新增：操作選單容器
+  previewTime: { fontSize: 12, color: '#9CA3AF', marginBottom: 8 },
+  separator: { height: 1, backgroundColor: '#F3F4F6', marginVertical: 10 },
+  previewLastMsg: { fontSize: 15, color: '#374151', marginBottom: 16 },
+
   previewActions: {
-      flexDirection: 'row',
-      justifyContent: 'space-around',
-      alignItems: 'center',
-      paddingVertical: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingVertical: 8,
   },
-  actionButtonSmall: {
-      alignItems: 'center',
-      paddingHorizontal: 10,
-  },
-  actionTextSmall: {
-      fontSize: 12,
-      color: COLORS.primary,
-      marginTop: 4,
-      fontWeight: '500',
-  },
-  actionTextSmallDanger: {
-      fontSize: 12,
-      color: '#EF4444',
-      marginTop: 4,
-      fontWeight: '500',
-  },
+  actionButtonSmall: { alignItems: 'center', paddingHorizontal: 10 },
+  actionTextSmall: { fontSize: 12, color: COLORS.primary, marginTop: 4, fontWeight: '500' },
+  actionTextSmallDanger: { fontSize: 12, color: '#EF4444', marginTop: 4, fontWeight: '500' },
+
   previewGoToChatBtn: {
-      backgroundColor: COLORS.primary,
-      paddingVertical: 12,
-      borderRadius: 8,
-      alignItems: 'center',
-      flexDirection: 'row',
-      justifyContent: 'center',
-      position: 'relative',
-      marginTop: 10,
+    backgroundColor: COLORS.primary,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    position: 'relative',
+    marginTop: 10,
   },
-  previewGoToChatText: {
-      color: '#FFF',
-      fontWeight: FONT_WEIGHTS.bold,
-      fontSize: FONT_SIZES.md,
-  },
+  previewGoToChatText: { color: '#FFF', fontWeight: FONT_WEIGHTS.bold, fontSize: FONT_SIZES.md },
   previewUnreadBadge: {
-      position: 'absolute',
-      right: 20,
-      backgroundColor: '#EF4444',
-      minWidth: 20,
-      height: 20,
-      borderRadius: 10,
-      justifyContent: 'center',
-      alignItems: 'center',
-      paddingHorizontal: 4,
+    position: 'absolute',
+    right: 20,
+    backgroundColor: '#EF4444',
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
   },
 });

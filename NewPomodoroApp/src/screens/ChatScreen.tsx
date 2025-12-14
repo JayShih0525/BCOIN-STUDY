@@ -166,7 +166,7 @@ export const ChatScreen: React.FC = () => {
 
   const { roomId: routeRoomId, targetUserId, targetUserName, isGroup = false } = route.params;
 
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   const { coins, refresh } = useCoinsContext();
   const { setActiveRoomId, clearRoomUnread, unread } = useUnread();
 
