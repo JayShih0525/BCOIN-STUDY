@@ -117,7 +117,7 @@ export const ForestScreen: React.FC = () => {
 
     const interval = setInterval(() => {
       console.log('⏱️ +1 coin (10 秒)');
-      addCoins(10); 
+      addCoins(100); 
     }, 10_000);
 
     return () => clearInterval(interval);

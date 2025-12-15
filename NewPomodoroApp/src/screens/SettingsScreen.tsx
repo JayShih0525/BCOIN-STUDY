@@ -20,7 +20,7 @@ type UserProfile = {
   school_code: string | null;
   school_name: string | null;
   avatar_url: string | null;
-  current_avatar_params: Record<string, any> | null;
+  avatar_params: Record<string, any> | null;
 };
 
 type OwnedPart = {
@@ -66,7 +66,7 @@ export const SettingsScreen: React.FC = () => {
       const [pRes, ownedRes] = await Promise.all([
         supabase
           .from('user_profiles')
-          .select('user_id,email,display_name,allow_chat,school_code,school_name,avatar_url,current_avatar_params')
+          .select('user_id,email,display_name,allow_chat,school_code,school_name,avatar_url,avatar_params')
           .eq('user_id', user.id)
           .single(),
         supabase.from('shop_purchases').select('item_id').eq('user_id', user.id),
@@ -81,7 +81,7 @@ export const SettingsScreen: React.FC = () => {
       setAllowChat(!!p?.allow_chat);
 
       // ✅ 初始化草稿頭像
-      const params = (p?.current_avatar_params ?? {}) as Record<string, any>;
+      const params = (p?.avatar_params ?? {}) as Record<string, any>;
       setDraftAvatarParams(params);
 
       // 若 db avatar_url 是 null，就用 dicebear + params 生成
@@ -116,7 +116,7 @@ export const SettingsScreen: React.FC = () => {
           display_name: displayName.trim() || null,
           allow_chat: allowChat,
           avatar_url: draftAvatarUrl,
-          current_avatar_params: draftAvatarParams, // 還原時會是 {}
+          avatar_params: draftAvatarParams, // 還原時會是 {}
           updated_at: new Date().toISOString(),
         })
         .eq('user_id', user.id);
@@ -174,9 +174,9 @@ export const SettingsScreen: React.FC = () => {
           avatarUrl={draftAvatarUrl}
           avatarParams={draftAvatarParams}
           ownedParts={ownedParts}
-          onChange={({ avatar_url, current_avatar_params }) => {
+          onChange={({ avatar_url, avatar_params }) => {
             setDraftAvatarUrl(avatar_url);
-            setDraftAvatarParams(current_avatar_params ?? {});
+            setDraftAvatarParams(avatar_params ?? {});
           }}
         />
 

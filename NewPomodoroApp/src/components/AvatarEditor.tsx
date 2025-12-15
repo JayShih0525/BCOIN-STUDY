@@ -24,7 +24,7 @@ type Props = {
   ownedParts: OwnedPart[];
 
   // 回傳給 SettingsScreen：新的 url/params
-  onChange: (next: { avatar_url: string; current_avatar_params: Record<string, any> }) => void;
+  onChange: (next: { avatar_url: string; avatar_params: Record<string, any> }) => void;
 };
 
 const BASE_PARAMS = { mouth: 'variant02', eyes: 'variant11', hair: 'long' };
@@ -70,7 +70,7 @@ export const AvatarEditor: React.FC<Props> = ({
     Object.assign(nextParams, part.avatarParams ?? {});
 
     onChange({
-      current_avatar_params: nextParams,
+      avatar_params: nextParams,
       avatar_url: buildUrlFromParams(nextParams),
     });
   };
@@ -86,7 +86,7 @@ export const AvatarEditor: React.FC<Props> = ({
     });
 
     onChange({
-      current_avatar_params: nextParams,
+      avatar_params: nextParams,
       avatar_url: buildUrlFromParams(nextParams),
     });
   };
@@ -95,7 +95,7 @@ export const AvatarEditor: React.FC<Props> = ({
   const restoreNoAccessories = () => {
     const empty: Record<string, any> = {};
     onChange({
-      current_avatar_params: empty,
+      avatar_params: empty,
       avatar_url: buildUrlFromParams(empty),
     });
   };
@@ -147,7 +147,7 @@ export const AvatarEditor: React.FC<Props> = ({
       // 自訂頭像：params 直接清空（你要的「沒有任何配件」效果）
       onChange({
         avatar_url: publicUrl,
-        current_avatar_params: {},
+        avatar_params: {},
       });
 
       Alert.alert('成功', '已選擇自訂頭像（記得按右上角儲存）');

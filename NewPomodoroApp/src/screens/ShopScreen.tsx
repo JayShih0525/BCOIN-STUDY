@@ -130,13 +130,13 @@ export const ShopScreen: React.FC = () => {
     'filter',
     'mouth',
     'eyes',
-    'hair',
-    'accessory',
+    // 'hair',
+    // 'accessory',
     'eyebrows',
     'glasses',
-    'background',
-    'style',
-    'backgroundType',
+    // 'background',
+    // 'style',
+    // 'backgroundType',
   ], []);
 
 
