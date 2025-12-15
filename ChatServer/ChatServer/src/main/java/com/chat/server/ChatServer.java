@@ -11,6 +11,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
+import com.google.gson.JsonElement; // 引入 JsonElement
 
 public class ChatServer {
 
@@ -88,7 +89,6 @@ public class ChatServer {
     public static void main(String[] args) {
         try {
             ChatServer server = new ChatServer(PORT);
-            // System.out.println(getLocalIP());
             getLocalIP();
             System.out.println("ChatServer running on port " + PORT + "...");
             server.start();
@@ -119,8 +119,6 @@ public class ChatServer {
     // Handle incoming JSON messages
     // ================================
     public void handleMessage(ClientHandler handler, String line) {
-        // System.out.println("RECV: " + line);
-
         JsonObject json;
         try {
             json = gson.fromJson(line, JsonObject.class);
@@ -192,7 +190,6 @@ public class ChatServer {
         socketToUserId.put(handler.getSocket(), userId);
         broadcastUserStatus(userId, true);
 
-        // System.out.println("LOGIN: " + userId);
         System.err.println("目前在線人數：" + onlineClients.size());
     }
 
@@ -219,7 +216,7 @@ public class ChatServer {
     }
 
     // ==========================================
-    // ★ 新增：處理查詢特定用戶狀態
+    // 處理查詢特定用戶狀態
     // ==========================================
     private void handleGetUserStatus(ClientHandler handler, JsonObject json) {
         String targetId = json.get("targetUserId").getAsString();
@@ -234,7 +231,7 @@ public class ChatServer {
     }
 
     // ==========================================
-    // ★ 新增：廣播用戶狀態變更 (給所有在線的人)
+    // 廣播用戶狀態變更
     // ==========================================
     private void broadcastUserStatus(String userId, boolean isOnline) {
         JsonObject json = new JsonObject();
@@ -244,11 +241,7 @@ public class ChatServer {
         
         String jsonStr = gson.toJson(json);
         
-        // 注意：在大型應用中，廣播給「所有人」效率很差。
-        // 通常只會廣播給「好友」或「正在聊天室的人」。
-        // 但為了實現你的需求，這裡先簡單地廣播給所有在線 Socket。
         for (ClientHandler client : onlineClients.values()) {
-            // 不用通知自己
             if (!client.getUserId().equals(userId)) {
                 client.sendRaw(jsonStr);
             }
@@ -256,10 +249,7 @@ public class ChatServer {
     }
 
     // ================================
-    // SEND_MESSAGE
-    // ================================
-    // ================================
-    // SEND_MESSAGE (修正版)
+    // SEND_MESSAGE (即時訊息處理)
     // ================================
     private void handleSendMessage(ClientHandler handler, JsonObject json) {
         String roomId = json.get("roomId").getAsString();
@@ -268,13 +258,16 @@ public class ChatServer {
         String tempId = json.has("tempId") ? json.get("tempId").getAsString() : null;
         boolean isServer = json.has("isServer") ? json.get("isServer").getAsBoolean() : false;
 
-        // 1. 先存入資料庫 (這部分保持不變)
+        // 1. 先存入資料庫
         MessageRecord msg = saveMessage(roomId, senderId, content, isServer);
 
         if (msg == null) {
             System.out.println("saveMessage failed");
             return;
         }
+        
+        // ★ 核心修改點 1: 獲取發送者的 display_name (用於即時廣播)
+        String senderDisplayName = fetchDisplayName(senderId);
 
         // 2. 準備回傳的 JSON
         JsonObject out = new JsonObject();
@@ -283,39 +276,29 @@ public class ChatServer {
         out.addProperty("messageId", msg.id); // 正式的 UUID
         out.addProperty("isServer", isServer);
         out.addProperty("senderId", senderId);
+        out.addProperty("senderDisplayName", senderDisplayName); // 加入 display_name
         out.addProperty("content", content);
         out.addProperty("createdAt", msg.createdAt.toString());
-        // 把前端傳來的 tempId 原封不動傳回去，讓前端可以消除半透明狀態
         if (tempId != null) out.addProperty("tempId", tempId);
 
         String jsonStr = gson.toJson(out);
 
-        // ============================================================
-        // ★ 核心修改：直接從 roomId 拆解出成員 ID，不依賴資料庫查詢
-        // ============================================================
+        // 3. 確定廣播成員
         String[] members;
         
-        // 判斷 roomId 是否包含底線 (是否為 1對1 格式)
         if (roomId.contains("_")) {
             members = roomId.split("_");
         } else {
-            // 如果是群組或其他格式，才去查資料庫 (或是維持原樣)
             List<String> dbMembers = getRoomMemberIds(roomId);
             members = dbMembers.toArray(new String[0]);
         }
 
-        // System.out.println("Broadcasting msg to room: " + roomId + ", members: " + Arrays.toString(members));
-
-        // 3. 發送給所有在線成員 (包含自己)
+        // 4. 發送給所有在線成員 (包含自己)
         for (String targetUid : members) {
             ClientHandler ch = onlineClients.get(targetUid);
             
             if (ch != null) {
-                // 如果對方在線，直接發送
                 ch.sendRaw(jsonStr);
-                // System.out.println(" -> Sent to " + targetUid);
-            } else {
-                // System.out.println(" -> User " + targetUid + " is offline");
             }
         }
     }
@@ -341,19 +324,80 @@ public class ChatServer {
     // Supabase REST Functions
     // ======================================================
 
-    // 1. 修改 handleGetHistory，接收 beforeCreatedAt
+    /**
+     * 輔助方法：單個用戶獲取 display_name
+     */
+    private String fetchDisplayName(String userId) {
+        Map<String, String> names = fetchDisplayNamesBatch(Collections.singleton(userId));
+        return names.getOrDefault(userId, userId); 
+    }
+
+    /**
+     * 批量查詢多個用戶的 display_name
+     * @param userIds 唯一用戶 ID 集合
+     * @return Map<userId, displayName>
+     */
+    private Map<String, String> fetchDisplayNamesBatch(Set<String> userIds) {
+        Map<String, String> namesMap = new HashMap<>();
+        if (userIds.isEmpty()) return namesMap;
+        
+        try {
+            // 構建查詢字串：?user_id=in.(id1,id2,id3...)
+            String idList = String.join(",", userIds);
+            String encodedIdList = URLEncoder.encode("(" + idList + ")", "UTF-8");
+            
+            String query = "/rest/v1/user_profiles?user_id=in." + encodedIdList + "&select=user_id,display_name";
+
+            URL url = new URL(SUPABASE_URL + query);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("apikey", ANON_KEY);
+            conn.setRequestProperty("Authorization", "Bearer " + ANON_KEY);
+
+            if (conn.getResponseCode() != 200) {
+                System.err.println("Failed to fetch display names batch. HTTP Status: " + conn.getResponseCode());
+                return namesMap;
+            }
+
+            BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) sb.append(line);
+            br.close();
+
+            com.google.gson.JsonArray arr = JsonParser.parseString(sb.toString()).getAsJsonArray();
+
+            for (int i = 0; i < arr.size(); i++) {
+                JsonObject obj = arr.get(i).getAsJsonObject();
+                String userId = obj.get("user_id").getAsString();
+                String displayName = userId; 
+                
+                if (obj.has("display_name") && !obj.get("display_name").isJsonNull()) {
+                    displayName = obj.get("display_name").getAsString();
+                }
+                namesMap.put(userId, displayName);
+            }
+        } catch (Exception e) {
+            System.err.println("fetchDisplayNamesBatch Exception: " + e.getMessage());
+        }
+        return namesMap;
+    }
+
+
+    // ==========================================
+    // 歷史訊息處理 (使用兩階段查詢)
+    // ==========================================
     private void handleGetHistory(ClientHandler handler, JsonObject json) {
         String roomId = json.get("roomId").getAsString();
         String beforeCreatedAt = json.has("beforeCreatedAt") ? json.get("beforeCreatedAt").getAsString() : null;
 
-        // 傳入 beforeCreatedAt
+        // 執行兩階段查詢並合併
         List<JsonObject> messages = fetchRoomMessages(roomId, beforeCreatedAt);
 
         JsonObject resp = new JsonObject();
         resp.addProperty("type", "HISTORY");
         resp.addProperty("roomId", roomId);
         
-        // 把這次請求的參考時間點傳回去，方便前端判斷是「初始載入」還是「載入更多」
         if (beforeCreatedAt != null) {
             resp.addProperty("requestBefore", beforeCreatedAt);
         }
@@ -367,25 +411,31 @@ public class ChatServer {
         handler.sendJson(resp);
     }
 
-    // 修正後的 fetchRoomMessages：加入 URL 編碼
+    /**
+     * 歷史訊息查詢 (兩階段查詢)
+     * 階段 1: 查詢 chat_messages
+     * 階段 2: 批量查詢 sender 的 display_name，並合併
+     */
     private List<JsonObject> fetchRoomMessages(String roomId, String beforeCreatedAt) {
         List<JsonObject> list = new ArrayList<>();
+        Set<String> uniqueSenderIds = new HashSet<>(); // 用於收集唯一的 senderId
+        
+        // ------------------------------------
+        // 第一階段: 查詢訊息本身 (只選基本欄位，避免 PostgREST 嵌套 Object)
+        // ------------------------------------
         try {
-            // ★ 修正 1：對 roomId 進行 URL 編碼，雖然 UUID 通常安全，但這是好習慣
             String encodedRoomId = URLEncoder.encode(roomId, "UTF-8");
             
-            // 使用 StringBuilder 構建基礎查詢
             StringBuilder query = new StringBuilder("/rest/v1/chat_messages?room_id=eq." + encodedRoomId);
 
-            // ★ 修正 2：對時間字串進行 URL 編碼
-            // 這會把 "2025...T...+00:00" 的 "+" 轉成 "%2B"，避免被誤判為空白
             if (beforeCreatedAt != null) {
                 String encodedTime = URLEncoder.encode(beforeCreatedAt, "UTF-8");
                 query.append("&created_at=lt.").append(encodedTime);
             }
 
-            query.append("&order=created_at.desc&limit=50");
-
+            // ★ 修正 1：只選擇所有基本欄位，不使用點記法
+            query.append("&select=id,room_id,sender_id,content,created_at,\"isServer\"&order=created_at.desc&limit=50");
+            
             URL url = new URL(SUPABASE_URL + query.toString());
 
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -393,16 +443,14 @@ public class ChatServer {
             conn.setRequestProperty("apikey", ANON_KEY);
             conn.setRequestProperty("Authorization", "Bearer " + ANON_KEY);
 
-            // 檢查 Response Code，方便除錯
             int status = conn.getResponseCode();
             if (status >= 400) {
-                // 如果失敗，讀取錯誤訊息以便除錯
                 BufferedReader errorReader = new BufferedReader(new InputStreamReader(conn.getErrorStream(), "UTF-8"));
                 StringBuilder errorSb = new StringBuilder();
                 String line;
                 while ((line = errorReader.readLine()) != null) errorSb.append(line);
                 errorReader.close();
-                System.out.println("Supabase Error (" + status + "): " + errorSb.toString());
+                System.out.println("Supabase History Error (" + status + "): " + errorSb.toString());
                 return list;
             }
 
@@ -417,25 +465,62 @@ public class ChatServer {
             for (int i = 0; i < arr.size(); i++) {
                 JsonObject row = arr.get(i).getAsJsonObject();
                 JsonObject msg = new JsonObject();
-                boolean isServer = false;
-                if (row.has("is_server") && !row.get("is_server").isJsonNull()) {
-                    isServer = row.get("is_server").getAsBoolean();
-                } else if (row.has("isServer") && !row.get("isServer").isJsonNull()) {
-                    // 兼容你之前可能存錯欄位名
-                    isServer = row.get("isServer").getAsBoolean();
-                }
+                
+                // 處理 isServer
+                boolean isServer = row.has("isServer") && !row.get("isServer").isJsonNull() 
+                                   ? row.get("isServer").getAsBoolean() 
+                                   : (row.has("isServer") && !row.get("isServer").isJsonNull() ? row.get("isServer").getAsBoolean() : false);
+
+
                 msg.addProperty("messageId", row.get("id").getAsString());
                 msg.addProperty("roomId", row.get("room_id").getAsString());
-                msg.addProperty("senderId", row.get("sender_id").getAsString());
                 msg.addProperty("content", row.get("content").getAsString());
                 msg.addProperty("createdAt", row.get("created_at").getAsString());
                 msg.addProperty("isServer", isServer);
+                
+                // ★ 核心修正 2 (解決 JsonObject 錯誤): 安全地提取 sender_id
+                JsonElement senderIdElement = row.get("sender_id");
+                String senderId = null;
+
+                if (senderIdElement != null) {
+                    if (senderIdElement.isJsonPrimitive()) {
+                        senderId = senderIdElement.getAsString();
+                    } else if (senderIdElement.isJsonObject()) {
+                        // 雖然我們只選了基本欄位，但如果 Supabase 仍返回物件，我們從物件中提取 ID
+                        // 假設物件結構是 {"id": "uuid"}
+                        if (senderIdElement.getAsJsonObject().has("id")) {
+                            senderId = senderIdElement.getAsJsonObject().get("id").getAsString();
+                        }
+                    }
+                }
+                
+                if (senderId != null) {
+                    msg.addProperty("senderId", senderId);
+                    uniqueSenderIds.add(senderId); // 收集 ID 以供第二階段查詢
+                } else {
+                    System.err.println("Warning: sender_id missing or invalid for a message in room " + roomId);
+                    continue; // 跳過無效的訊息
+                }
+                
                 list.add(msg);
             }
         } catch (Exception e) {
             System.out.println("fetchRoomMessages Exception: " + e.getMessage());
             e.printStackTrace();
+            return list;
         }
+        
+        // ------------------------------------
+        // 第二階段: 批量查詢名稱並合併
+        // ------------------------------------
+        Map<String, String> namesMap = fetchDisplayNamesBatch(uniqueSenderIds);
+        
+        for (JsonObject msg : list) {
+            String senderId = msg.get("senderId").getAsString();
+            String displayName = namesMap.getOrDefault(senderId, senderId); // 找不到則 fallback 到 senderId
+            msg.addProperty("senderDisplayName", displayName);
+        }
+        
         return list;
     }
 
@@ -453,16 +538,12 @@ public class ChatServer {
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 
             conn.setRequestMethod("POST");
-            // Note: For a server, it is safer to use the SERVICE_ROLE_KEY here instead of ANON_KEY
-            // to bypass Row Level Security (RLS) policies.
             conn.setRequestProperty("apikey", ANON_KEY);
             conn.setRequestProperty("Authorization", "Bearer " + ANON_KEY);
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("Prefer", "return=representation");
             conn.setDoOutput(true);
 
-            // FIX 1: Use Gson to build JSON safely
-            // Manual string concatenation causes HTTP 400 on special characters
             JsonObject payload = new JsonObject();
             payload.addProperty("room_id", roomId);
             payload.addProperty("sender_id", senderId);
@@ -477,7 +558,6 @@ public class ChatServer {
 
             int code = conn.getResponseCode();
             
-            // FIX 2: Read the error details from Supabase if request fails
             if (code >= 400) {
                 InputStream errorStream = conn.getErrorStream();
                 String errorMsg = "No error details";
@@ -536,7 +616,6 @@ public class ChatServer {
             conn.setRequestProperty("apikey", ANON_KEY);
             conn.setRequestProperty("Authorization", "Bearer " + ANON_KEY);
 
-            // ⭐ Java 8 讀取 input stream
             BufferedReader br = new BufferedReader(
                     new InputStreamReader(conn.getInputStream(), "UTF-8")
             );
@@ -551,7 +630,6 @@ public class ChatServer {
 
             String response = sb.toString();
 
-            // ⭐ Java 8 不能用 var
             com.google.gson.JsonArray arr =
                     JsonParser.parseString(response).getAsJsonArray();
 

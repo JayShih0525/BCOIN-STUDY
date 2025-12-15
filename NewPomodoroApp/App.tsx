@@ -18,6 +18,7 @@ import { FilterCameraScreen } from './src/screens/FilterCameraScreen';
 import { CoinsProvider } from './src/context/CoinsContext';
 import { SchoolDetailScreen } from './src/screens/SchoolDetailScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
+import AddGroupMemberScreen from './src/screens/AddGroupMemberScreen';
 import { ChatListScreen } from './src/screens/ChatListScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { UnreadProvider } from './src/context/UnreadContext';
@@ -53,6 +54,8 @@ function MainStack() {
       <Stack.Screen name="ChatList" component={ChatListScreen} />
       {/* 設定頁面 */}
       <Stack.Screen name="Settings" component={SettingsScreen} />
+      {/* 新增群組成員頁面 */}
+      <Stack.Screen name="AddGroupMemberScreen" component={AddGroupMemberScreen} />
     </Stack.Navigator>
   );
 }

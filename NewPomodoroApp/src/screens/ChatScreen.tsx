@@ -21,7 +21,6 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 
 // ★ 引入 Clipboard 和下載所需的模組
 import Clipboard from '@react-native-clipboard/clipboard';
-// import Clipboard from '@react-native-community/clipboard'; 
 import { check, request, PERMISSIONS, RESULTS } from 'react-native-permissions';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import RNFS from 'react-native-fs'; 
@@ -53,9 +52,13 @@ const { width, height } = Dimensions.get('window');
 type RootStackParamList = {
   Chat: {
     roomId?: string;
-    targetUserId: string;
+    targetUserId?: string; // 群組模式下可能為空
     targetUserName: string;
     isGroup?: boolean;
+  };
+  AddGroupMemberScreen: {
+    roomId: string;
+    onSelectUsers: (selectedIds: string[]) => void;
   };
 };
 
@@ -73,12 +76,12 @@ type ChatMessage = {
   isServer?: boolean;
 };
 
-// --- Helper Functions for Image Download & Permissions ---
+// --- Helper Functions for Image Download & Permissions (略) ---
 
 const getSavePermission = async (): Promise<boolean> => {
   const permission = Platform.select({
     ios: PERMISSIONS.IOS.PHOTO_LIBRARY_ADD_ONLY,
-    android: Platform.Version >= 33
+    android: Platform.Version >= '33'
       ? PERMISSIONS.ANDROID.READ_MEDIA_IMAGES
       : PERMISSIONS.ANDROID.WRITE_EXTERNAL_STORAGE,
     default: undefined,
@@ -123,7 +126,7 @@ const saveImageToGallery = async (url: string) => {
   }
 };
 
-// --- 日期 Helper ---
+// --- 日期 Helper (略) ---
 const isSameDay = (iso1: string, iso2: string) => {
   const d1 = new Date(iso1);
   const d2 = new Date(iso2);
@@ -171,53 +174,56 @@ export const ChatScreen: React.FC = () => {
   const { coins, refresh } = useCoinsContext();
   const { setActiveRoomId, clearRoomUnread, unread } = useUnread();
 
-  // --- State ---
+  // --- State Hooks (必須在最頂層且順序固定) ---
   const [roomId, setRoomId] = useState<string>(routeRoomId || '');
   const [roomReady, setRoomReady] = useState<boolean>(!!routeRoomId || isGroup);
   const [targetAvatarUrl, setTargetAvatarUrl] = useState<string | null>(null);
-  
-  // 名字 State (用來從 DB 覆蓋路由參數)
   const [displayName, setDisplayName] = useState(targetUserName); 
-
+  const [roomMembers, setRoomMembers] = useState<Map<string, { displayName: string, avatarUrl: string }>>(new Map());
+  const [userRole, setUserRole] = useState<'member' | 'admin' | 'owner' | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-
   const [inputText, setInputText] = useState('');
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [unreadNewMsgCount, setUnreadNewMsgCount] = useState(0);
   const [isTargetOnline, setIsTargetOnline] = useState(false);
-
-  // 上傳 / 轉帳
   const [isUploading, setIsUploading] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferAmount, setTransferAmount] = useState('');
   const [isTransferring, setIsTransferring] = useState(false);
-  
-  // 圖片預覽 State
   const [imageModalVisible, setImageModalVisible] = useState(false);
   const [currentImageUrl, setCurrentImageUrl] = useState('');
-  // ★ 修正點 1: 新增圖片載入狀態
   const [isImageLoading, setIsImageLoading] = useState(true); 
 
-  // --- Refs ---
+  // --- Refs Hooks (必須在頂層) ---
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
   const historyFetchedRef = useRef(false);
   const currentRoomIdRef = useRef<string>('');
-  
-  // PanResponder 狀態
   const pan = useRef(new Animated.ValueXY()).current; 
 
-  // ★ PanResponder Hook
+  // ------------------------------------------------------
+  // Memos and Callbacks (必須在頂層)
+  // ------------------------------------------------------
+  
+  const formatTime = (iso: string) => {
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+
+  const handleCloseImageModal = useCallback(() => {
+    pan.setValue({ x: 0, y: 0 }); 
+    setImageModalVisible(false); 
+  }, [pan, setImageModalVisible]);
+  
+  // ★ PanResponder Hook (必須在頂層)
   const panResponder = useMemo(() => {
     return PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (evt, gestureState) => {
-        // 只有向下垂直拖曳超過 5 像素才啟用 PanResponder
         return Math.abs(gestureState.dy) > Math.abs(gestureState.dx) && gestureState.dy > 5;
       },
-      
       onPanResponderMove: Animated.event(
         [
           null, 
@@ -225,7 +231,6 @@ export const ChatScreen: React.FC = () => {
         ],
         { useNativeDriver: false } 
       ),
-      
       onPanResponderRelease: (evt, gestureState) => {
         const isClosing = gestureState.dy > 100 || gestureState.vy > 0.5;
 
@@ -235,12 +240,9 @@ export const ChatScreen: React.FC = () => {
               duration: 200,
               useNativeDriver: true,
           }).start(() => {
-              // ★ 修正點 3: 刪除 pan.setValue({ x: 0, y: 0 });
-              // 我們使用點擊關閉按鈕/handleCloseImageModal 來安全地重置 pan
               setImageModalVisible(false);
           });
         } else {
-          // 拖曳不足夠，回彈到原始位置 (0, 0)
           Animated.spring(pan, {
             toValue: { x: 0, y: 0 },
             useNativeDriver: true, 
@@ -250,82 +252,127 @@ export const ChatScreen: React.FC = () => {
       },
     });
   }, [pan, setImageModalVisible]);
+  
+  // ★ 判斷當前用戶是否有管理權限 (Memo)
+  const canManageGroup = useMemo(() => {
+    if (!isGroup || !userRole) return false;
+    return userRole === 'owner' || userRole === 'admin';
+  }, [isGroup, userRole]);
 
-
-  const formatTime = (iso: string) => {
-    const d = new Date(iso);
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  };
 
   // ------------------------------------------------------
-  // ✅ 1) 進頁面先確保 roomId（只對 1v1）+ 載入頭像和名稱
+  // 核心函數: 獲取成員列表 (Callback)
   // ------------------------------------------------------
+  const fetchMembers = useCallback(async () => {
+    if (!roomId || !isGroup || !user?.id) return;
+    try {
+      const { data: memberRows, error: memberRowsError } = await supabase
+          .from('chat_room_members')
+          .select('user_id, role') 
+          .eq('room_id', roomId);
+
+      if (memberRowsError) throw memberRowsError;
+      if (!memberRows || memberRows.length === 0) return;
+
+      const roleMap = new Map<string, string>();
+      memberRows.forEach(r => roleMap.set(r.user_id, r.role));
+      
+      const currentUserRole = (roleMap.get(user.id) || 'member') as 'member' | 'admin' | 'owner';
+      setUserRole(currentUserRole);
+
+      const memberIds = memberRows.map(r => r.user_id);
+      const { data: profiles, error: profileError } = await supabase
+        .from('user_profiles')
+        .select('user_id, display_name, avatar_url')
+        .in('user_id', memberIds);
+
+      if (profileError || !profiles) throw profileError;
+
+      const newMembersMap = new Map<string, { displayName: string, avatarUrl: string }>();
+      profiles.forEach((p: any) => {
+        const fallback = getAvatarUrl(p.user_id);
+        newMembersMap.set(p.user_id, {
+          displayName: p.display_name || `User ${p.user_id.substring(0, 4)}`,
+          avatarUrl: p.avatar_url || fallback,
+        });
+      });
+      setRoomMembers(newMembersMap);
+
+    } catch (e) {
+      console.error('[ChatScreen] Fetch group members error:', e);
+    }
+  }, [roomId, isGroup, user?.id]);
+
+
+  // ------------------------------------------------------
+  // ✅ Effects (Hook 順序固定)
+  // ------------------------------------------------------
+  
+  // Effect 1: 處理房間 ID、單人頭像/名稱、群組成員初次獲取
   useEffect(() => {
     let cancelled = false;
 
-    (async () => {
-      if (!user?.id || !targetUserId) return;
+    const setupRoom = async () => {
+      if (!user?.id) return;
 
-      // 1. 異步：獲取目標用戶頭像和名稱
-      try {
-        const { data, error } = await supabase
-          .from('user_profiles')
-          .select('avatar_url, display_name') 
-          .eq('user_id', targetUserId)
-          .maybeSingle();
+      // 1. 單人模式：獲取目標用戶頭像和名稱
+      if (!isGroup && targetUserId) {
+        // ... (單人查詢邏輯)
+        try {
+            const { data, error } = await supabase
+            .from('user_profiles')
+            .select('avatar_url, display_name') 
+            .eq('user_id', targetUserId)
+            .maybeSingle();
 
-        if (cancelled) return;
-
-        if (!error && data) {
-          if (data.avatar_url) setTargetAvatarUrl(data.avatar_url);
-          else setTargetAvatarUrl(getAvatarUrl(targetUserId));
-          
-          if (data.display_name) setDisplayName(data.display_name);
-        } else {
-          setTargetAvatarUrl(getAvatarUrl(targetUserId));
-        }
-      } catch {
-        if (!cancelled) setTargetAvatarUrl(getAvatarUrl(targetUserId));
+            if (!error && data) {
+                if (data.avatar_url) setTargetAvatarUrl(data.avatar_url);
+                else setTargetAvatarUrl(getAvatarUrl(targetUserId));
+                
+                if (data.display_name) setDisplayName(data.display_name);
+            } else {
+                setTargetAvatarUrl(getAvatarUrl(targetUserId));
+            }
+        } catch {}
       }
 
       // 2. 處理房間邏輯
       if (isGroup || routeRoomId) {
-        if (cancelled) return;
         if (routeRoomId) setRoomId(routeRoomId);
         setRoomReady(true);
+        if (isGroup && routeRoomId) await fetchMembers(); // 獲取群組成員
         return;
       }
 
-      if (roomReady && roomId) return;
-
       // 確保 1v1 room
-      try {
-        const { data, error } = await supabase.rpc('ensure_one_to_one_room', {
-          p_user1_id: user.id,
-          p_user2_id: targetUserId,
-        });
+      if (targetUserId) {
+        try {
+          const { data, error } = await supabase.rpc('ensure_one_to_one_room', {
+            p_user1_id: user.id,
+            p_user2_id: targetUserId,
+          });
 
-        if (error) throw error;
-        const ensuredRoomId = String(data);
+          if (error) throw error;
+          const ensuredRoomId = String(data);
 
-        if (!cancelled) {
-          setRoomId(ensuredRoomId);
-          setRoomReady(true);
+          if (!cancelled) {
+            setRoomId(ensuredRoomId);
+            setRoomReady(true);
+          }
+        } catch (e: any) {
+          console.error('[ChatScreen] ensure_one_to_one_room error', e);
         }
-      } catch (e: any) {
-        console.error('[ChatScreen] ensure_one_to_one_room error', e);
-        Alert.alert('錯誤', e?.message || '無法建立/取得聊天室');
       }
-    })();
+    };
+
+    void setupRoom();
 
     return () => {
       cancelled = true;
     };
-  }, [user?.id, targetUserId, isGroup, routeRoomId]); 
-
-  // ------------------------------------------------------
-  // ✅ 2) Room Context (未讀)
-  // ------------------------------------------------------
+  }, [user?.id, targetUserId, isGroup, routeRoomId, fetchMembers]); 
+  
+  // Effect 2: Room Context (未讀)
   useEffect(() => {
     if (!roomReady || !roomId) return;
     setActiveRoomId(roomId);
@@ -336,9 +383,7 @@ export const ChatScreen: React.FC = () => {
     };
   }, [roomReady, roomId, setActiveRoomId, clearRoomUnread]);
 
-  // ------------------------------------------------------
-  // ✅ 3) reset 當 roomId 變了（避免切換聊天室殘留）
-  // ------------------------------------------------------
+  // Effect 3: Reset state when roomId changes
   useEffect(() => {
     if (!roomReady || !roomId) return;
 
@@ -353,12 +398,11 @@ export const ChatScreen: React.FC = () => {
       setUnreadNewMsgCount(0);
       setShowScrollBottom(false);
       setIsTargetOnline(false);
+      setUserRole(null); 
     }
   }, [roomReady, roomId]);
 
-  // ------------------------------------------------------
-  // ✅ 4) Connect TCP + 取 history + listener
-  // ------------------------------------------------------
+  // Effect 4: Chat Listener and History Fetch
   useEffect(() => {
     if (!user || !roomReady || !roomId) return;
 
@@ -369,7 +413,9 @@ export const ChatScreen: React.FC = () => {
 
       if (!historyFetchedRef.current) {
         getChatHistory(roomId, user.id);
-        checkUserOnline(targetUserId);
+        if (!isGroup && targetUserId) {
+             checkUserOnline(targetUserId);
+        }
         historyFetchedRef.current = true;
       }
     });
@@ -379,6 +425,23 @@ export const ChatScreen: React.FC = () => {
       if (content.includes('💸 Sent') && content.includes('coins')) return 'TRANSFER';
       return 'TEXT';
     };
+    
+    // 輔助函數：如果 Map 中缺少該發送者，則使用伺服器提供的名稱更新 Map
+    const updateRoomMemberIfMissing = (senderId: string, displayNameFromMsg?: string) => {
+        if (!isGroup || !displayNameFromMsg) return;
+        
+        setRoomMembers(prev => {
+            if (prev.has(senderId)) return prev; 
+            
+            const newMap = new Map(prev);
+            newMap.set(senderId, {
+                displayName: displayNameFromMsg,
+                avatarUrl: getAvatarUrl(senderId), 
+            });
+            return newMap;
+        });
+    };
+
 
     const listener = (msg: any) => {
       if (!msg || typeof msg !== 'object') return;
@@ -386,6 +449,26 @@ export const ChatScreen: React.FC = () => {
       // -------------- HISTORY --------------
       if (msg.type === 'HISTORY' && msg.roomId === roomId) {
         const rawList = msg.data || [];
+        
+        // ★ 處理歷史訊息，使用伺服器提供的 senderDisplayName 更新 roomMembers
+        if (isGroup) {
+             setRoomMembers(prev => {
+                const nextMap = new Map(prev);
+                rawList.forEach((row: any) => {
+                    const senderId = row.senderId;
+                    const displayName = row.senderDisplayName || `User ${senderId.substring(0, 4)}`;
+
+                    if (!nextMap.has(senderId)) {
+                        nextMap.set(senderId, { 
+                            displayName: displayName, 
+                            avatarUrl: getAvatarUrl(senderId)
+                        });
+                    }
+                });
+                return nextMap;
+            });
+        }
+        
         const mapped: ChatMessage[] = rawList.map((row: any) => ({
           id: row.messageId,
           roomId: row.roomId,
@@ -422,6 +505,11 @@ export const ChatScreen: React.FC = () => {
       if (msg.type === 'MESSAGE' && msg.roomId === roomId) {
         const fromMe = msg.senderId === user.id;
         const msgType = detectType(msg.content);
+
+        // ★ 處理即時訊息，更新 roomMembers (如果缺少)
+        if (isGroup && !fromMe && msg.senderDisplayName) {
+            updateRoomMemberIfMissing(msg.senderId, msg.senderDisplayName);
+        }
 
         setMessages((prev) => {
           let pendingIndex = -1;
@@ -486,27 +574,21 @@ export const ChatScreen: React.FC = () => {
       removed = true;
       removeChatListener(listener);
     };
-  }, [user?.id, roomReady, roomId, targetUserId]);
+  }, [user?.id, roomReady, roomId, targetUserId, isGroup, roomMembers]);
+
 
   // ------------------------------------------------------
   // Actions
   // ------------------------------------------------------
   
-  // 圖片預覽和下載處理
+  // (省略其他 Action 函數定義，如 handleImagePress, handlePickImage, handleTransfer...)
   const handleImagePress = (url: string) => {
     setCurrentImageUrl(url);
     pan.setValue({ x: 0, y: 0 });
-    // ★ 修正點 4: 重置載入狀態
     setIsImageLoading(true); 
     setImageModalVisible(true);
   };
 
-  const handleCloseImageModal = useCallback(() => {
-    // 確保 pan 重置 (這裡的重置不會觸發重啟感，因為 Modal 隨即被移除)
-    pan.setValue({ x: 0, y: 0 }); 
-    setImageModalVisible(false); 
-  }, [pan, setImageModalVisible]);
-  
   const handleImageLongPress = (url: string) => {
     Alert.alert(
       '下載圖片',
@@ -557,9 +639,9 @@ export const ChatScreen: React.FC = () => {
       setIsUploading(false);
     }
   };
-
+  
   const handleTransfer = async () => {
-    if (!user || !roomId) return;
+    if (!user || !roomId || isGroup || !targetUserId) return; // 群組禁用轉帳
 
     const val = parseInt(transferAmount, 10);
     if (isNaN(val) || val <= 0) {
@@ -627,13 +709,79 @@ export const ChatScreen: React.FC = () => {
     flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
   };
 
-  // ------------------------------------------------------
-  // UI Helpers
-  // ------------------------------------------------------
+
+  // --- Group Management Functions ---
+  const executeAddUsers = async (newMembersToInvite: string[]) => {
+      
+      const confirm = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+              '確認添加',
+              `確定要添加 ${newMembersToInvite.length} 位新成員嗎？`,
+              [
+                  { text: '取消', style: 'cancel', onPress: () => resolve(false) },
+                  { text: '確認', style: 'default', onPress: () => resolve(true) },
+              ]
+          );
+      });
+  
+      if (!confirm) return;
+  
+      setIsLoading(true);
+      try {
+          const { error } = await supabase.rpc('add_user_to_group', {
+              p_room_id: roomId,
+              p_new_member_ids: newMembersToInvite, 
+              p_caller_id: user!.id, 
+          });
+  
+          if (error) throw error;
+          
+          Alert.alert('成功', '成員已成功加入群組！');
+          void fetchMembers(); // 刷新成員列表
+          
+      } catch (err: any) {
+          console.error('添加用戶失敗:', err);
+          Alert.alert('錯誤', err.message || '無法添加用戶，請檢查權限或網路。');
+      } finally {
+          setIsLoading(false);
+      }
+  };
+  
+  const handleAddUser = () => {
+    if (!canManageGroup) {
+      return Alert.alert('權限不足', '只有管理員或擁有者可以添加用戶。');
+    }
+    
+    if (!user || !roomId) return;
+
+    // 導航到選擇頁面，並傳遞回調函數來接收選定用戶 ID
+    navigation.navigate('AddGroupMemberScreen', {
+        roomId: roomId,
+    });
+  };
+
+  const handleChangeGroupName = () => {
+    if (!canManageGroup) return Alert.alert('權限不足', '只有管理員或擁有者可以修改群組名稱。');
+    Alert.alert('管理功能', '打開修改群組名稱 Modal...');
+  };
+
+  const handleChangeGroupImage = () => {
+    if (!canManageGroup) return Alert.alert('權限不足', '只有管理員或擁有者可以修改群組圖片。');
+    Alert.alert('管理功能', '打開圖片選擇器來修改群組圖片...');
+  };
+
+
+  // --- UI Helpers ---
   const handleScroll = (event: any) => {
     const offsetY = event.nativeEvent.contentOffset.y;
-    setShowScrollBottom(offsetY > 300);
-    if (offsetY <= 300) setUnreadNewMsgCount(0);
+    
+    const shouldShow = offsetY > 300;
+    
+    if (!shouldShow && showScrollBottom) {
+        setUnreadNewMsgCount(0);
+    }
+    
+    setShowScrollBottom(shouldShow);
   };
 
   const scrollToBottom = () => {
@@ -655,7 +803,7 @@ export const ChatScreen: React.FC = () => {
   const isImageUrl = (content: string) => content.includes('chat-images');
 
   // ------------------------------------------------------
-  // Render Item
+  // Render Item 
   // ------------------------------------------------------
   const renderItem = ({ item, index }: { item: ChatMessage; index: number }) => {
     const nextItem = messages[index + 1];
@@ -665,7 +813,9 @@ export const ChatScreen: React.FC = () => {
     const isSystem = !!item.isServer && !isTransfer;
     const isImage = isImageUrl(item.content) || item.type === 'IMAGE';
 
-    // 系統訊息：置中
+    const showSenderInfo = isGroup && !item.fromMe && !isSystem;
+    const sender = roomMembers.get(item.senderId);
+
     if (isSystem) {
       return (
         <View style={styles.itemContainer}>
@@ -677,61 +827,76 @@ export const ChatScreen: React.FC = () => {
       );
     }
 
-    // 一般訊息 or 轉帳訊息：左右氣泡
     return (
       <View style={styles.itemContainer}>
         {showDateHeader && <DateHeader dateLabel={getDateLabel(item.createdAt)} />}
 
-        <View style={[styles.messageBubbleWrapper, item.fromMe ? styles.meWrapper : styles.otherWrapper]}>
-          <TouchableOpacity 
-            activeOpacity={0.8}
-            // 文本長按複製
-            onLongPress={() => {
-              if (!isImage && !isTransfer && !isSystem) {
-                Clipboard.setString(item.content);
-                Alert.alert('已複製', '訊息內容已複製到剪貼簿。');
-              }
-            }}
-          > 
-          <View
-            style={[
-              styles.messageBubble,
-              isTransfer ? styles.transferBubble : item.fromMe ? styles.meBubble : styles.otherBubble,
-              { opacity: item.isPending ? 0.6 : 1 },
-              isImage && { padding: 0, backgroundColor: 'transparent', borderWidth: 0 },
-            ]}
-          >
-            {isImage ? (
-              // 圖片點擊放大，長按下載
-              <TouchableOpacity 
-                onPress={() => handleImagePress(item.content)} 
-                onLongPress={() => handleImageLongPress(item.content)}
-                activeOpacity={0.9}
-              >
-                <Image source={{ uri: item.content }} style={styles.chatImage} resizeMode="cover" />
-              </TouchableOpacity>
-            ) : (
-              <Text
-                style={[
-                  styles.messageText,
-                  isTransfer ? styles.transferText : item.fromMe ? styles.meText : styles.otherText,
-                ]}
-              >
-                {item.content}
+        <View style={[styles.groupMessageRow, item.fromMe ? styles.meRow : styles.otherRow]}>
+          
+          {showSenderInfo && (
+            <Image 
+              source={{ uri: sender?.avatarUrl || getAvatarUrl(item.senderId) }} 
+              style={styles.groupAvatarSmall} 
+            />
+          )}
+          
+          <View style={[styles.messageContentBlock, item.fromMe && styles.messageContentBlockMe]}>
+            {showSenderInfo && (
+              <Text style={styles.senderName}>
+                {sender?.displayName || item.senderId}
               </Text>
             )}
 
-            <Text
-              style={[
-                styles.timestamp,
-                item.fromMe ? styles.meTimestamp : styles.otherTimestamp,
-                isTransfer && { color: 'rgba(180, 83, 9, 0.7)' },
-              ]}
-            >
-              {formatTime(item.createdAt)}
-            </Text>
+            <View style={[styles.messageBubbleWrapper, item.fromMe ? styles.meWrapper : styles.otherWrapper]}>
+              <TouchableOpacity 
+                activeOpacity={0.8}
+                onLongPress={() => {
+                  if (!isImage && !isTransfer && !isSystem) {
+                    Clipboard.setString(item.content);
+                    Alert.alert('已複製', '訊息內容已複製到剪貼簿。');
+                  }
+                }}
+              > 
+              <View
+                style={[
+                  styles.messageBubble,
+                  isTransfer ? styles.transferBubble : item.fromMe ? styles.meBubble : styles.otherBubble,
+                  { opacity: item.isPending ? 0.6 : 1 },
+                  isImage && { padding: 0, backgroundColor: 'transparent', borderWidth: 0 },
+                ]}
+              >
+                {isImage ? (
+                  <TouchableOpacity 
+                    onPress={() => handleImagePress(item.content)} 
+                    onLongPress={() => handleImageLongPress(item.content)}
+                    activeOpacity={0.9}
+                  >
+                    <Image source={{ uri: item.content }} style={styles.chatImage} resizeMode="cover" />
+                  </TouchableOpacity>
+                ) : (
+                  <Text
+                    style={[
+                      styles.messageText,
+                      isTransfer ? styles.transferText : item.fromMe ? styles.meText : styles.otherText,
+                    ]}
+                  >
+                    {item.content}
+                  </Text>
+                )}
+
+                <Text
+                  style={[
+                    styles.timestamp,
+                    item.fromMe ? styles.meTimestamp : styles.otherTimestamp,
+                    isTransfer && { color: 'rgba(180, 83, 9, 0.7)' },
+                  ]}
+                >
+                  {formatTime(item.createdAt)}
+                </Text>
+              </View>
+              </TouchableOpacity>
+            </View>
           </View>
-          </TouchableOpacity>
         </View>
       </View>
     );
@@ -744,45 +909,69 @@ export const ChatScreen: React.FC = () => {
     <ScreenContainer>
       <TopBar coins={coins} unreadCount={unread.total} />
 
+      {/* 聊天室 Header */}
       <View style={styles.chatHeader}>
         <TouchableOpacity onPress={handleGoBack} style={styles.backButton}>
           <Ionicons name="chevron-back" size={24} color={COLORS.black} />
         </TouchableOpacity>
 
         <View style={styles.headerInfo}>
-          <View style={styles.avatarContainer}>
-            {/* 使用 targetAvatarUrl 獲取真實頭像，否則使用 fallback */}
-            <Image 
-              source={{ uri: targetAvatarUrl || getAvatarUrl(targetUserId) }} 
-              style={styles.avatarImage} 
-              resizeMode="cover" 
-            />
-            {isTargetOnline && <View style={styles.onlineBadge} />}
-          </View>
+          {isGroup ? (
+            <View style={styles.avatarContainer}>
+              <View style={[styles.avatarImage, styles.groupAvatarFallback]}>
+                <Ionicons name="people" size={24} color={COLORS.primary} />
+              </View>
+            </View>
+          ) : (
+            <View style={styles.avatarContainer}>
+              <Image 
+                source={{ uri: targetAvatarUrl! }}
+                style={styles.avatarImage} 
+                resizeMode="cover" 
+              />
+              {isTargetOnline && <View style={styles.onlineBadge} />}
+            </View>
+          )}
 
           <View>
-            {/* 使用 displayName State 顯示名稱 */}
             <Text style={styles.headerTitle}>{displayName}</Text> 
-            <Text style={[styles.headerStatus, { color: isTargetOnline ? '#10B981' : '#9CA3AF' }]}>
-              {isTargetOnline ? '在線' : '離線'}
-            </Text>
+            
+            {!isGroup && (
+              <Text style={[styles.headerStatus, { color: isTargetOnline ? '#10B981' : '#9CA3AF' }]}>
+                {isTargetOnline ? '在線' : '離線'}
+              </Text>
+            )}
+            
+            {isGroup && (
+              <Text style={styles.headerStatus}>
+                {roomMembers.size} 位成員 {userRole && userRole !== 'member' && `(${userRole === 'owner' ? '擁有者' : '管理員'})`}
+              </Text>
+            )}
           </View>
         </View>
+        
+        {/* 群組管理按鈕 */}
+        {isGroup && canManageGroup && (
+          <TouchableOpacity onPress={() => Alert.alert('群組管理', '選擇操作', [
+            { text: '添加用戶', onPress: handleAddUser },
+            { text: '修改名稱', onPress: handleChangeGroupName },
+            { text: '修改圖片', onPress: handleChangeGroupImage },
+            { text: '取消', style: 'cancel' },
+          ])} style={styles.groupManageButton}>
+            <Ionicons name="settings-outline" size={24} color={COLORS.primary} />
+          </TouchableOpacity>
+        )}
       </View>
 
       <KeyboardAvoidingView
         style={styles.keyboardContainer}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        {!roomReady ? (
+        {/* Loading / List Content */}
+        {!roomReady || isLoading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={COLORS.primary} />
-            <Text style={styles.loadingText}>建立聊天室中...</Text>
-          </View>
-        ) : isLoading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={COLORS.primary} />
-            <Text style={styles.loadingText}>載入中...</Text>
+            <Text style={styles.loadingText}>{!roomReady ? '建立聊天室中...' : '載入中...'}</Text>
           </View>
         ) : (
           <View style={styles.listContainer}>
@@ -869,7 +1058,6 @@ export const ChatScreen: React.FC = () => {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>發送金幣</Text>
-            {/* 使用 displayName State */}
             <Text style={styles.modalSubtitle}>給: {displayName}</Text> 
             <Text style={styles.balanceText}>目前餘額: {coins}</Text>
 
@@ -902,18 +1090,12 @@ export const ChatScreen: React.FC = () => {
         </View>
       </Modal>
 
-      {/* ★★★ 圖片預覽 Modal (實現拖曳關閉動畫) ★★★ */}
+      {/* 圖片預覽 Modal */}
       <Modal 
           visible={imageModalVisible} 
           transparent={true} 
           animationType="none"
-          // ★ 修正點 1: 處理 Android/硬體返回鍵
           onRequestClose={handleCloseImageModal}
-          // ★ 修正點 2: 解決頁面重啟感問題。當 Modal 隱藏後才重置 pan。
-          onDismiss={() => {
-              // 在 Modal 卸載完成後，如果 pan 還有殘留值，強制重置，但這通常由 handleCloseImageModal 處理
-              // 我們主要依賴 PanResponder 的邏輯
-          }}
       >
         
         {/* Modal 背景 (實現透明度插值) */}
@@ -970,7 +1152,7 @@ export const ChatScreen: React.FC = () => {
           {/* 關閉按鈕 */}
           <TouchableOpacity 
               style={styles.imageModalCloseButton} 
-              onPress={handleCloseImageModal} // ★ 修正點 4: 使用統一的關閉函數
+              onPress={handleCloseImageModal} 
           >
               <Ionicons name="close-circle" size={40} color="#FFF" />
           </TouchableOpacity>
@@ -988,6 +1170,7 @@ export const ChatScreen: React.FC = () => {
   );
 };
 
+// --- Styles (包含優化後的訊息氣泡樣式) ---
 const styles = StyleSheet.create({
   keyboardContainer: { flex: 1, backgroundColor: '#F9FAFB' },
   listContainer: { flex: 1, position: 'relative' },
@@ -1000,9 +1183,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF',
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6',
+    justifyContent: 'space-between',
   },
   backButton: { padding: 4, marginRight: 8 },
-  headerInfo: { flexDirection: 'row', alignItems: 'center' },
+  groupManageButton: { padding: 4, marginLeft: 8 },
+  
+  headerInfo: { 
+    flexDirection: 'row', 
+    alignItems: 'center',
+    flex: 1,
+  },
   headerTitle: { fontSize: FONT_SIZES.md, fontWeight: FONT_WEIGHTS.bold, color: '#1F2937' },
   headerStatus: { fontSize: 12, fontWeight: '500' },
 
@@ -1014,6 +1204,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#F3F4F6',
     borderWidth: 1,
     borderColor: '#E5E7EB',
+  },
+  groupAvatarFallback: {
+    backgroundColor: '#E0E7FF',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   onlineBadge: {
     position: 'absolute',
@@ -1052,20 +1247,54 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  // ★ 群組聊天專用樣式
+  groupMessageRow: { 
+    flexDirection: 'row', 
+    marginVertical: 4, 
+    width: '100%',
+    alignItems: 'flex-start',
+  },
+  meRow: { justifyContent: 'flex-end', paddingLeft: '15%' },
+  otherRow: { justifyContent: 'flex-start' }, 
+  
+  groupAvatarSmall: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    marginRight: 8,
+    backgroundColor: '#F3F4F6',
+  },
+  messageContentBlock: {
+    flexShrink: 1, 
+    alignItems: 'flex-start',
+    maxWidth: '85%',
+  },
+  messageContentBlockMe: {
+    alignItems: 'flex-end', 
+  },
+  senderName: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginBottom: 2,
+    marginLeft: 10,
+  },
+  // ★ --------------------------
+
   messageBubbleWrapper: { marginVertical: 4, width: '100%' },
   meWrapper: { alignItems: 'flex-end' },
   otherWrapper: { alignItems: 'flex-start' },
 
   messageBubble: {
-    maxWidth: '75%',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    paddingBottom: 20,
     borderRadius: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 1,
+    position: 'relative',
   },
   meBubble: { backgroundColor: COLORS.secondary, borderBottomRightRadius: 4 },
   otherBubble: { backgroundColor: '#FFFFFF', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#E5E7EB' },
@@ -1073,15 +1302,31 @@ const styles = StyleSheet.create({
   transferBubble: { backgroundColor: '#FEF3C7', borderColor: '#FCD34D', borderWidth: 1 },
   transferText: { color: '#B45309', fontWeight: 'bold' },
 
-  messageText: { fontSize: 15, lineHeight: 22 },
+  messageText: { 
+    fontSize: 15, 
+    lineHeight: 22,
+    flexShrink: 1, 
+    marginRight: 4,
+  },
   meText: { color: '#000000' },
   otherText: { color: '#000000' },
 
   chatImage: { width: 200, height: 200, borderRadius: 10, backgroundColor: '#eee' },
 
-  timestamp: { fontSize: 10, marginTop: 4, alignSelf: 'flex-end' },
-  meTimestamp: { color: '#9CA3AF' },
-  otherTimestamp: { color: '#9CA3AF' },
+  timestamp: { 
+    fontSize: 10, 
+    position: 'absolute',
+    bottom: 4, 
+    color: '#9CA3AF',
+  },
+  meTimestamp: { 
+    right: 8,
+    left: undefined,
+  },
+  otherTimestamp: { 
+    right: 8,
+    left: undefined,
+  },
 
   inputContainer: {
     flexDirection: 'row',
@@ -1198,7 +1443,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     borderRadius: 8,
   },
-  // 新增圖片載入器樣式
   imageLoader: {
     position: 'absolute',
     justifyContent: 'center',

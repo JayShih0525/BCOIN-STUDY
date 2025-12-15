@@ -228,9 +228,8 @@ export const ChatListScreen: React.FC = () => {
           setRooms((prev) => {
             const idx = prev.findIndex((r) => r.roomId === roomId);
             if (idx === -1) {
-              // 不在列表中：避免頻繁 fetch，改成「標記」後由 user 下拉 or 回到頁面再刷新
-              // 如果你仍想立刻同步新聊天室，可解除下一行註解：
-              // fetchRooms(true);
+              // ★ 修正點 1: 如果收到新房間的訊息（列表中沒有），立即重新獲取列表，以確保新房間顯示。
+              fetchRooms(true); 
               return prev;
             }
 

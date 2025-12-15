@@ -28,6 +28,10 @@ export type RootStackParamList = {
   };
   ChatList: undefined; // ★ 名稱是 ChatList
   Settings: undefined;
+  AddGroupMemberScreen: {
+    roomId: string;
+    onSelectUsers: (selectedIds: string[]) => void;
+  };
 };
 
 export type TabScreenName = keyof RootTabParamList;
