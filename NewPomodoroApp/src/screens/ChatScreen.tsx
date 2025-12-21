@@ -220,38 +220,31 @@ export const ChatScreen: React.FC = () => {
   // ★ PanResponder Hook (必須在頂層)
   const panResponder = useMemo(() => {
     return PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
+      // ❌ 不要永遠 true
+      onStartShouldSetPanResponder: (evt) => {
+        const touches = evt.nativeEvent.touches?.length ?? 0;
+        return touches === 1; // ✅ 只有單指才讓它接管（用來下滑關閉）
+      },
+
       onMoveShouldSetPanResponder: (evt, gestureState) => {
+        const touches = evt.nativeEvent.touches?.length ?? 0;
+        if (touches >= 2) return false; // ✅ 兩指縮放時不要接管
         return Math.abs(gestureState.dy) > Math.abs(gestureState.dx) && gestureState.dy > 5;
       },
-      onPanResponderMove: Animated.event(
-        [
-          null, 
-          { dy: pan.y } 
-        ],
-        { useNativeDriver: false } 
-      ),
+
+      onPanResponderMove: Animated.event([null, { dy: pan.y }], { useNativeDriver: false }),
+
       onPanResponderRelease: (evt, gestureState) => {
         const isClosing = gestureState.dy > 100 || gestureState.vy > 0.5;
-
         if (isClosing) {
-          Animated.timing(pan, {
-              toValue: { x: 0, y: height }, 
-              duration: 200,
-              useNativeDriver: true,
-          }).start(() => {
-              setImageModalVisible(false);
-          });
+          Animated.timing(pan, { toValue: { x: 0, y: height }, duration: 200, useNativeDriver: true })
+            .start(() => setImageModalVisible(false));
         } else {
-          Animated.spring(pan, {
-            toValue: { x: 0, y: 0 },
-            useNativeDriver: true, 
-            bounciness: 5,
-          }).start();
+          Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: true, bounciness: 5 }).start();
         }
       },
     });
-  }, [pan, setImageModalVisible]);
+  }, [pan]);
   
   // ★ 判斷當前用戶是否有管理權限 (Memo)
   const canManageGroup = useMemo(() => {
@@ -1145,7 +1138,7 @@ export const ChatScreen: React.FC = () => {
             ]}
             resizeMode="contain" 
             // 綁定載入事件，解決卡頓問題
-            onLoadStart={() => setIsImageLoading(true)}
+            // onLoadStart={() => setIsImageLoading(true)}
             onLoadEnd={() => setIsImageLoading(false)}
           />
           
