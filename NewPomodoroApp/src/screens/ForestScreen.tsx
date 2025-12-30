@@ -237,16 +237,33 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingBottom: 120,
+    // 讓內容從頂部開始排，不要使用 space-between
+    justifyContent: 'flex-start', 
+  },
+  topSection: {
+    alignItems: 'center',
+    marginTop: 20, // 調整文字與頂部 TopBar 的距離
   },
   taskInfo: {
-    paddingVertical: SPACING.xs,
+    // 縮短「讀書」文字與「59:19」的距離
+    marginBottom: -10, 
     paddingHorizontal: SPACING.md,
   },
   taskName: {
     fontSize: FONT_SIZES.md,
     fontWeight: FONT_WEIGHTS.semibold,
     color: COLORS.black,
+  },
+  contentSection: {
+    // 這是關鍵：讓影片和按鈕區塊整體往上移動
+    marginTop: 30, 
+    alignItems: 'center',
+    width: '100%',
+  },
+  buttonWrapper: {
+    // 讓 Start 按鈕離開底部 Tab Bar，確保可以點擊
+    marginTop: 20, 
+    // 如果按鈕還是太低，可以再增加這個值或給一個 marginBottom
+    marginBottom: 50, 
   },
 });

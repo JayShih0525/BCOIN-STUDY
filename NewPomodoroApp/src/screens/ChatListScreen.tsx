@@ -23,11 +23,7 @@ import { COLORS, FONT_SIZES, FONT_WEIGHTS, SPACING } from '../constants/theme';
 import { supabase } from '../lib/supabase';
 
 // TCP chat client
-import {
-  connectChatServer,
-  addChatListener,
-  removeChatListener,
-} from '../utils/chatClient';
+import { connectChatServer, addChatListener, removeChatListener } from '../utils/chatClient';
 
 // ------------------------------
 // Types
@@ -39,7 +35,7 @@ interface ChatRoomSummary {
   lastMessageTime?: string | null;
   isGroup: boolean;
   targetUserId?: string | null;
-  avatarUrl?: string | null;
+  avatarUrl?: string | null; // ✅ 用於：私聊對方頭貼、或群組頭貼
 }
 
 interface SupabaseChatRoomSummary {
@@ -49,6 +45,9 @@ interface SupabaseChatRoomSummary {
   target_user_id?: string | null;
   last_message?: string | null;
   last_message_time?: string | null;
+
+  // ✅ 若你後端 RPC 已經願意回這個欄位，就會直接用（沒有也沒關係）
+  avatar_url?: string | null;
 }
 
 // ------------------------------
@@ -86,12 +85,11 @@ export const ChatListScreen: React.FC = () => {
     const now = new Date();
     const isToday = date.toDateString() === now.toDateString();
 
-    if (isToday) {
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
+    if (isToday) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     return date.toLocaleDateString([], { month: '2-digit', day: '2-digit' });
   };
 
+  // ✅ ChatScreen 同款 dicebear fallback
   const fallbackAvatar = useCallback((seed: string) => {
     const encodedSeed = encodeURIComponent(seed || 'default');
     return `https://api.dicebear.com/9.x/adventurer-neutral/png?seed=${encodedSeed}&backgroundColor=transparent`;
@@ -102,10 +100,8 @@ export const ChatListScreen: React.FC = () => {
     if (!content) return false;
     const s = content.trim();
 
-    // supabase public storage（你的 chat-images 路徑）
     if (s.includes('/storage/v1/object/public/chat-images/')) return true;
 
-    // 一般圖片網址判斷
     if (!/^https?:\/\//i.test(s)) return false;
     return /\.(png|jpg|jpeg|webp|gif)(\?.*)?$/i.test(s);
   };
@@ -115,6 +111,19 @@ export const ChatListScreen: React.FC = () => {
     if (isImageUrl(item.lastMessage)) return '[相片]';
     return item.lastMessage.trim();
   };
+
+  // ✅ 群組頭貼的顯示 URL：有就用，沒有就 fallback（Image）
+  const getGroupAvatarUri = useCallback(
+    (item: ChatRoomSummary) => {
+      const v = (item.avatarUrl ?? '').trim();
+      const valid = v.length > 0 && v !== 'NULL';
+      if (valid) return v;
+
+      // 用 roomId / 群名當 seed 都可以
+      return fallbackAvatar(item.roomId || item.name || 'group');
+    },
+    [fallbackAvatar]
+  );
 
   // ------------------------------
   // 1) Fetch Rooms
@@ -139,6 +148,7 @@ export const ChatListScreen: React.FC = () => {
 
         const realRooms = (data ?? []) as SupabaseChatRoomSummary[];
 
+        // 先建 baseRooms（先把 RPC 的 avatar_url（若存在）帶進來）
         const baseRooms: ChatRoomSummary[] = realRooms.map((row) => ({
           roomId: row.room_id,
           name: row.name,
@@ -146,10 +156,12 @@ export const ChatListScreen: React.FC = () => {
           targetUserId: row.target_user_id ?? null,
           lastMessage: row.last_message ?? null,
           lastMessageTime: row.last_message_time ?? null,
-          avatarUrl: null,
+          avatarUrl: row.avatar_url ?? null,
         }));
 
-        // 批量查對方頭像
+        // --------------------------
+        // A) 私聊：批量查對方頭像 user_profiles
+        // --------------------------
         const targetIds = Array.from(
           new Set(
             baseRooms
@@ -170,7 +182,40 @@ export const ChatListScreen: React.FC = () => {
 
             baseRooms.forEach((r) => {
               if (!r.isGroup && r.targetUserId) {
+                // 只覆蓋私聊用
                 r.avatarUrl = map.get(r.targetUserId) ?? null;
+              }
+            });
+          }
+        }
+
+        // --------------------------
+        // B) 群組：如果 RPC 沒回 avatar_url，就批次查 chat_rooms.avatar_url
+        // --------------------------
+        const groupRoomIdsNeedingAvatar = baseRooms
+          .filter((r) => r.isGroup)
+          .filter((r) => {
+            const v = (r.avatarUrl ?? '').trim();
+            return !(v.length > 0 && v !== 'NULL');
+          })
+          .map((r) => r.roomId);
+
+        // 注意：即使 RPC 沒回 avatar_url，這裡也會補齊
+        if (groupRoomIdsNeedingAvatar.length > 0) {
+          const { data: groupRooms, error: gErr } = await supabase
+            .from('chat_rooms')
+            .select('id, avatar_url')
+            .in('id', groupRoomIdsNeedingAvatar);
+
+          if (!gErr && groupRooms) {
+            const gMap = new Map<string, string | null>();
+            groupRooms.forEach((gr: any) => gMap.set(String(gr.id), gr.avatar_url ?? null));
+
+            baseRooms.forEach((r) => {
+              if (r.isGroup) {
+                const current = (r.avatarUrl ?? '').trim();
+                const valid = current.length > 0 && current !== 'NULL';
+                if (!valid) r.avatarUrl = gMap.get(r.roomId) ?? null;
               }
             });
           }
@@ -228,8 +273,8 @@ export const ChatListScreen: React.FC = () => {
           setRooms((prev) => {
             const idx = prev.findIndex((r) => r.roomId === roomId);
             if (idx === -1) {
-              // ★ 修正點 1: 如果收到新房間的訊息（列表中沒有），立即重新獲取列表，以確保新房間顯示。
-              fetchRooms(true); 
+              // 如果收到新房間的訊息（列表中沒有），重新抓一次
+              fetchRooms(true);
               return prev;
             }
 
@@ -251,7 +296,6 @@ export const ChatListScreen: React.FC = () => {
 
       void attach();
 
-      // ✅ 正確清理：focus 結束時移除 listener
       return () => {
         cancelled = true;
         if (listenerRef.current) {
@@ -286,7 +330,6 @@ export const ChatListScreen: React.FC = () => {
 
       const newRoomId = String(data);
 
-      // ✅ 建好後直接刷新一次：避免前端假資料和後端不同步
       setShowCreateModal(false);
       setNewGroupName('');
       await fetchRooms(true);
@@ -313,7 +356,6 @@ export const ChatListScreen: React.FC = () => {
   };
 
   const openRoom = (item: ChatRoomSummary) => {
-    // ✅ 群組：直接進
     if (item.isGroup) {
       navigation.navigate('Chat', { roomId: item.roomId, isGroup: true, targetUserName: item.name });
       return;
@@ -367,7 +409,9 @@ export const ChatListScreen: React.FC = () => {
     const timeStr = formatListTime(item.lastMessageTime);
 
     const avatarUri =
-      item.isGroup ? null : item.avatarUrl || fallbackAvatar(item.targetUserId || 'unknown');
+      item.isGroup
+        ? getGroupAvatarUri(item) // ✅ 群組用 DB avatar_url 或 fallback
+        : item.avatarUrl || fallbackAvatar(item.targetUserId || 'unknown'); // ✅ 私聊：對方 avatar_url 或 fallback
 
     return (
       <TouchableOpacity
@@ -378,11 +422,17 @@ export const ChatListScreen: React.FC = () => {
       >
         <View style={styles.avatarContainer}>
           {item.isGroup ? (
-            <View style={[styles.avatar, styles.groupAvatar]}>
-              <Ionicons name="people" size={24} color={COLORS.primary} />
-            </View>
+            // ✅ 群組：有 avatarUrl 就顯示 Image；沒有就顯示 people icon
+            (item.avatarUrl && item.avatarUrl.trim().length > 0 && item.avatarUrl.trim() !== 'NULL') ? (
+              <Image source={{ uri: item.avatarUrl }} style={styles.avatar} resizeMode="cover" />
+            ) : (
+              <View style={[styles.avatar, styles.groupAvatar]}>
+                <Ionicons name="people" size={24} color={COLORS.primary} />
+              </View>
+            )
           ) : (
-            <Image source={{ uri: avatarUri! }} style={styles.avatar} />
+            // ✅ 私聊：維持原本（對方 avatarUrl 或 dicebear fallback）
+            <Image source={{ uri: avatarUri! }} style={styles.avatar} resizeMode="cover" />
           )}
 
           {unreadCount > 0 && (
@@ -425,11 +475,7 @@ export const ChatListScreen: React.FC = () => {
         <Text style={styles.pageTitle}>訊息列表</Text>
 
         <View style={styles.rightHeaderGroup}>
-          <TouchableOpacity
-            onPress={() => setShowCreateModal(true)}
-            style={styles.createBtn}
-            activeOpacity={0.8}
-          >
+          <TouchableOpacity onPress={() => setShowCreateModal(true)} style={styles.createBtn} activeOpacity={0.8}>
             <Ionicons name="add" size={24} color="#FFF" />
           </TouchableOpacity>
           <View style={styles.spacerRight} />
@@ -452,11 +498,7 @@ export const ChatListScreen: React.FC = () => {
               </View>
             }
             refreshControl={
-              <RefreshControl
-                refreshing={isRefreshing}
-                onRefresh={onRefresh}
-                tintColor={COLORS.primary}
-              />
+              <RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />
             }
           />
         )}
@@ -495,17 +537,8 @@ export const ChatListScreen: React.FC = () => {
       </Modal>
 
       {/* 長按預覽 Modal */}
-      <Modal
-        visible={previewModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={handleClosePreview}
-      >
-        <TouchableOpacity
-          style={styles.previewModalOverlay}
-          onPress={handleClosePreview}
-          activeOpacity={1}
-        >
+      <Modal visible={previewModalVisible} transparent animationType="fade" onRequestClose={handleClosePreview}>
+        <TouchableOpacity style={styles.previewModalOverlay} onPress={handleClosePreview} activeOpacity={1}>
           {previewContent && (
             <TouchableOpacity activeOpacity={1} style={styles.previewModalContent} onPress={() => {}}>
               <View style={styles.previewInfo}>
@@ -520,19 +553,13 @@ export const ChatListScreen: React.FC = () => {
 
               <View style={styles.previewActions}>
                 {(unread.perRoom[previewContent.roomId] || 0) > 0 && (
-                  <TouchableOpacity
-                    style={styles.actionButtonSmall}
-                    onPress={() => handleMarkAsRead(previewContent)}
-                  >
+                  <TouchableOpacity style={styles.actionButtonSmall} onPress={() => handleMarkAsRead(previewContent)}>
                     <Ionicons name="checkmark-done" size={20} color={COLORS.primary} />
                     <Text style={styles.actionTextSmall}>設為已讀</Text>
                   </TouchableOpacity>
                 )}
 
-                <TouchableOpacity
-                  style={styles.actionButtonSmall}
-                  onPress={() => handleDeleteChat(previewContent)}
-                >
+                <TouchableOpacity style={styles.actionButtonSmall} onPress={() => handleDeleteChat(previewContent)}>
                   <Ionicons name="trash-outline" size={20} color="#EF4444" />
                   <Text style={styles.actionTextSmallDanger}>刪除</Text>
                 </TouchableOpacity>
@@ -641,12 +668,6 @@ const styles = StyleSheet.create({
     height: 50,
     borderRadius: 25,
     backgroundColor: '#F3F4F6',
-  },
-
-  groupAvatar: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#E0E7FF',
   },
 
   unreadBadge: {
@@ -781,5 +802,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 4,
+  },
+  groupAvatar: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#E0E7FF',
   },
 });
